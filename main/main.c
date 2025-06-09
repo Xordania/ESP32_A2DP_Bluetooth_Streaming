@@ -581,6 +581,8 @@ void bt_a2dp_source_init(void)
     ESP_LOGI(TAG, "A2DP source initialized successfully");
 }
 
+
+
 void app_main(void)
 {
     bt_a2dp_source_init();
