@@ -121,6 +121,27 @@ static discovered_device_t* get_discovered_devices(int *count)
 }
 
 /**
+ * @brief Debug function to log current cache state
+ *
+ * Logs the current state of the device cache including FIFO pointer position.
+ * Useful for debugging cache behavior and FIFO operation.
+ */
+static void log_cache_state(void)
+{
+    ESP_LOGD(TAG, "Cache state: %d/%d devices, FIFO pointer at %d", 
+             discovered_devices_count, CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE, discovered_devices_fifo_pointer);
+    
+    for (int i = 0; i < discovered_devices_count; i++)
+    {
+        ESP_LOGD(TAG, "  [%d] %02x:%02x:%02x:%02x:%02x:%02x %s", i,
+                 discovered_devices_cache[i].bda[0], discovered_devices_cache[i].bda[1], 
+                 discovered_devices_cache[i].bda[2], discovered_devices_cache[i].bda[3],
+                 discovered_devices_cache[i].bda[4], discovered_devices_cache[i].bda[5],
+                 (i == discovered_devices_fifo_pointer && discovered_devices_count == CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE) ? "<-- next overwrite" : "");
+    }
+}
+
+/**
  * @brief Get human-readable device class description
  *
  * Converts Bluetooth major device class code to descriptive string.
@@ -268,7 +289,6 @@ static void device_processing_task(void *pvParameters)
                      device.bda[0], device.bda[1], device.bda[2],
                      device.bda[3], device.bda[4], device.bda[5]);
 
-            bool is_audio_device = false;
             char device_name[64] = "Unknown";
 
 
@@ -300,7 +320,6 @@ static void device_processing_task(void *pvParameters)
                     if (major_class == 0x04)
                     {
                         ESP_LOGI(TAG, "Found audio/video device!");
-                        is_audio_device = true;
                     }
                     break;
                 }
