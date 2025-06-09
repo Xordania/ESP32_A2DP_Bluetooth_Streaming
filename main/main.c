@@ -409,6 +409,12 @@ static void bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
     }
 }
 
+/**
+ * @brief Log current A2DP configuration settings
+ *
+ * Displays the current configuration values that were set via Kconfig.
+ * Useful for debugging and verifying configuration during initialization.
+ */
 static void log_config(){
     // Log configuration values
     ESP_LOGI(TAG, "A2DP Source Configuration:");
