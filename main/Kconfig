@@ -38,6 +38,24 @@ menu "A2DP Source Configuration"
             Maximum number of device properties to copy when a device is discovered.
             This prevents buffer overflow if a device reports many properties.
             Most devices report 3-5 properties, so 10 is usually sufficient.
+
+    config A2DP_MAX_DISCOVERED_DEVICES_CACHE
+        int "Maximum devices in discovery cache"
+        range 5 20
+        default 10
+        help
+            Maximum number of discovered Bluetooth devices to cache for duplicate
+            detection and future device selection.
+            
+            Each cached device uses approximately 300+ bytes (full device info).
+            
+            Memory usage: cache_size × ~300 bytes
+            Examples:
+            - 10 devices = ~3KB RAM
+            - 15 devices = ~4.5KB RAM  
+            - 20 devices = ~6KB RAM
+            
+            Recommended: 10-15 devices for most applications to preserve memory space.
     
     choice A2DP_DEVICE_PROCESSING_CORE
         prompt "Device processing task core affinity"

@@ -47,6 +47,107 @@ static const char *TAG = "A2DP_SOURCE";
 // Queue for discoverd devices
 static QueueHandle_t discovered_device_queue = NULL;
 
+// Cache for discovered devices to prevent duplicate processing and for retrival later on when selecting devices
+static discovered_device_t discovered_devices_cache[CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE];
+static int discovered_devices_count = 0;
+static int discovered_devices_fifo_pointer = 0;
+
+/**
+ * @brief Check if device has already been discovered and processed
+ *
+ * Searches the discovered devices cache to see if we've already processed
+ * this device. Prevents duplicate processing of the same device during
+ * discovery phase.
+ *
+ * @param bda Bluetooth device address to check
+ * @return true if device already discovered, false if new device
+ */
+static bool is_device_already_discovered(esp_bd_addr_t bda)
+{
+    for (int i = 0; i < discovered_devices_count; i++)
+    {
+        if (memcmp(discovered_devices_cache[i].bda, bda, ESP_BD_ADDR_LEN) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Add device to discovered devices cache
+ *
+ * Adds a new device to the cache of already-discovered devices.
+ * The cache is built as a fifo with a rotating pointer to the 'end'
+ * of the fifo keeping track of where we are.
+ * @param device Complete discovered device information to add to cache
+ */
+static void add_device_to_cache(discovered_device_t *device)
+{
+
+    if (discovered_devices_count < CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE)
+    {
+        // Cache not full yet, add to next available slot
+        memcpy(&discovered_devices_cache[discovered_devices_count], device, sizeof(discovered_device_t));
+        discovered_devices_count++;
+    }
+    else
+    {
+        // Cache is full, overwrite oldest entry using FIFO pointer
+        memcpy(&discovered_devices_cache[discovered_devices_fifo_pointer], device, sizeof(discovered_device_t));
+        
+        // Advance FIFO pointer with wrap-around
+        discovered_devices_fifo_pointer = (discovered_devices_fifo_pointer + 1) % CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE;
+        
+        ESP_LOGD(TAG, "Cache full, overwrote device at index %d, next overwrite at %d", 
+                 (discovered_devices_fifo_pointer - 1 + CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE) % CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE,
+                 discovered_devices_fifo_pointer);
+    }
+}
+
+/**
+ * @brief Get cached discovered devices for selection
+ *
+ * Returns pointer to the discovered devices cache and count.
+ * Useful for implementing device selection UI.
+ *
+ * @param count Pointer to store the number of cached devices
+ * @return discovered_device_t* Pointer to cache array
+ */
+static discovered_device_t* get_discovered_devices(int *count)
+{
+    *count = discovered_devices_count;
+    return discovered_devices_cache;
+}
+
+/**
+ * @brief Get human-readable device class description
+ *
+ * Converts Bluetooth major device class code to descriptive string.
+ * Useful for debugging and understanding what types of devices are discovered.
+ *
+ * @param major_class Major device class code from Class of Device
+ * @return const char* Human-readable description
+ */
+static const char* get_device_class_name(uint32_t major_class)
+{
+    switch (major_class)
+    {
+        case 0x00: return "Miscellaneous";
+        case 0x01: return "Computer";
+        case 0x02: return "Phone";
+        case 0x03: return "LAN/Network Access Point";
+        case 0x04: return "Audio/Video";
+        case 0x05: return "Peripheral";
+        case 0x06: return "Imaging";
+        case 0x07: return "Wearable";
+        case 0x08: return "Toy";
+        case 0x09: return "Health";
+        case 0x1F: return "Uncategorized";
+        default: return "Unknown";
+    }
+}
+
 /**
  * @brief Parse audio codec configuration from A2DP negotiation
  *
@@ -152,13 +253,24 @@ static void device_processing_task(void *pvParameters)
 
     while (1)
     {
-        if (xQueueReceive(discovered_device_queue, &device, portMAX_DELAY))
+       if (xQueueReceive(discovered_device_queue, &device, portMAX_DELAY))
         {
-            ESP_LOGI(TAG, "Processing device: %02x:%02x:%02x:%02x:%02x:%02x",
+            // Check if we've already processed this device
+            if (is_device_already_discovered(device.bda))
+            {
+                ESP_LOGD(TAG, "Device %02x:%02x:%02x:%02x:%02x:%02x already processed, skipping",
+                         device.bda[0], device.bda[1], device.bda[2],
+                         device.bda[3], device.bda[4], device.bda[5]);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "Processing new device: %02x:%02x:%02x:%02x:%02x:%02x",
                      device.bda[0], device.bda[1], device.bda[2],
                      device.bda[3], device.bda[4], device.bda[5]);
 
             bool is_audio_device = false;
+            char device_name[64] = "Unknown";
+
 
             // Process device properties
             for (int i = 0; i < device.num_prop; i++)
@@ -168,8 +280,9 @@ static void device_processing_task(void *pvParameters)
                 switch (prop->type)
                 {
                 case ESP_BT_GAP_DEV_PROP_BDNAME:
-                    ESP_LOGI(TAG, "Device name: %s", (char *)prop->val);
-                    break;
+                    strncpy(device_name, (char *)prop->val, sizeof(device_name) - 1);
+                    device_name[sizeof(device_name) - 1] = '\0';
+                    ESP_LOGI(TAG, "Device name: %s", device_name);                    break;
 
                 case ESP_BT_GAP_DEV_PROP_COD:
                 {
@@ -202,14 +315,12 @@ static void device_processing_task(void *pvParameters)
                 }
             }
 
-            // Connect to audio devices
-            if (is_audio_device)
-            {
-                ESP_LOGI(TAG, "Attempting A2DP connection...");
-                esp_a2d_source_connect(device.bda);
-                esp_bt_gap_cancel_discovery();
-                break; // Stop processing more devices
-            }
+            // Add to cache for future reference (all devices, not just audio)
+            add_device_to_cache(&device);
+            
+            // Debug only
+            log_cache_state();
+
         }
     }
 }
