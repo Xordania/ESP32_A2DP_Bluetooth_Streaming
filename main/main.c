@@ -307,6 +307,13 @@ static void bt_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
         ESP_LOGI(TAG, "Media control acknowledged");
         break;
 
+    case ESP_A2D_PROF_STATE_EVT:
+        if(param->a2d_prof_stat.init_state == ESP_A2D_INIT_SUCCESS){
+            ESP_LOGI(TAG, "A2DP initialization successful");
+        }else{
+            ESP_LOGI(TAG, "A2DP deinitialization successful");
+        }
+        break;
     default:
         ESP_LOGE(TAG, "Unhandled A2DP event %d", event);
         break;
@@ -424,6 +431,125 @@ static void log_config(){
     ESP_LOGI(TAG, "Max device properties: %d", CONFIG_A2DP_MAX_DEVICE_PROPERTIES);
 }
 
+
+/**
+ * @brief Initialize ESP32 Bluetooth Controller and Bluedroid Stack
+ *
+ * Performs the core ESP32 Bluetooth initialization including controller
+ * configuration, controller enable, and Bluedroid stack initialization.
+ * This function encapsulates all the low-level Bluetooth stack setup.
+ *
+ * The controller must be enabled first, then the Bluedroid protocol 
+ * stack should be initialized and enabled.
+ *
+ * @return esp_err_t ESP_OK on success, error code on failure
+ *
+ * @note Controller is configured for Classic Bluetooth mode only
+ * @note Requires CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY to be set
+ */
+static esp_err_t esp_bt_stack_init(void)
+{
+    esp_err_t ret;
+
+    // Configure Bluetooth controller for Classic BT mode
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    bt_cfg.mode = ESP_BT_MODE_CLASSIC_BT;
+
+    // Ensure we're in the correct controller mode. Change controller mode in menuconfig if not
+    #if CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY
+    #error "A2DP requires Classic Bluetooth - change controller mode in menuconfig"
+    #endif
+
+    // Initialize and enable Bluetooth controller
+    ret = esp_bt_controller_init(&bt_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth controller initialize failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth controller enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Initialize and enable Bluedroid stack
+    ret = esp_bluedroid_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth stack init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_bluedroid_enable();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth stack enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Bluetooth controller and stack initialized successfully");
+    return ESP_OK;
+}
+
+/**
+ * @brief Initialize GAP (Generic Access Profile) functionality
+ *
+ * Sets up the Bluetooth Generic Access Profile including callback registration,
+ * device name configuration, scan mode setup, and device discovery initiation.
+ *
+ * GAP is responsible for device discovery, connection establishment, 
+ * security procedures, and device management.
+ *
+ * GAP setup sequence:
+ * 1. Register GAP event callback for handling discovery and authentication
+ * 2. Set device name for identification by other devices
+ * 3. Configure scan mode (connectable and discoverable)
+ * 4. Start device discovery to find nearby Bluetooth devices
+ *
+ * @return esp_err_t ESP_OK on success, error code on failure
+ *
+ * @note Device discovery runs for 10 seconds by default
+ * @note Device will be both connectable and discoverable to other devices
+ */
+static esp_err_t bt_gap_init(void)
+{
+    esp_err_t ret;
+
+    // Register GAP callback for device discovery and authentication events
+    ret = esp_bt_gap_register_callback(bt_gap_cb);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "GAP callback register failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Set device name that will be visible to other Bluetooth devices
+    ret = esp_bt_gap_set_device_name(BT_DEVICE_NAME);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Set device name failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Set scan mode to be both connectable and discoverable
+    ret = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Set scan mode failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Start device discovery (general inquiry for 10 seconds, unlimited responses)
+    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Start discovery failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "GAP initialized and device discovery started");
+    return ESP_OK;
+}
+
 /**
  * @brief Initialize Bluetooth A2DP source functionality
  *
@@ -451,10 +577,12 @@ static void log_config(){
  */
 void bt_a2dp_source_init(void)
 {
+    esp_err_t ret;
+
     log_config();
 
-    // Intiitalize NVS to store Bluetooth paiaring data storage
-    esp_err_t ret = nvs_flash_init();
+    // Initialize NVS to store Bluetooth pairing data storage
+    ret = nvs_flash_init();
 
     // If the storage is full then erase it and reinit
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -467,14 +595,6 @@ void bt_a2dp_source_init(void)
 
     // Release unused memory back to the heap
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
-
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    bt_cfg.mode = ESP_BT_MODE_CLASSIC_BT;
-
-    // Ensure we're in the correct controller code. Change controller mode in menuconfig if not
-    #if CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY
-    #error "A2DP requires Classic Bluetooth - change controller mode in menuconfig"
-    #endif
 
     // Create the queues and tasks for discovered devices
     discovered_device_queue = xQueueCreate(CONFIG_A2DP_DISCOVERED_DEVICE_QUEUE_SIZE, sizeof(discovered_device_t));
@@ -508,37 +628,14 @@ void bt_a2dp_source_init(void)
         return;
     }
 
-    // Controller config and enables error checks
-    ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Bluetooth controller initialize failed: %s", esp_err_to_name(ret));
+    // Initialize ESP32 Bluetooth controller and stack
+    ret = esp_bt_stack_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth stack initialization failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Bluetooth controller enable failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Turn on the bluetooth stack
-    ret = esp_bluedroid_init();
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Bluetooth stack init failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    ret = esp_bluedroid_enable();
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Bluetooth stack enable failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Register callbacks
+    // Register A2DP callback
     ret = esp_a2d_register_callback(bt_a2d_cb);
     if (ret != ESP_OK)
     {
@@ -546,13 +643,7 @@ void bt_a2dp_source_init(void)
         return;
     }
 
-    ret = esp_bt_gap_register_callback(bt_gap_cb);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "GAP callback register failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
+    // Initialize A2DP source profile
     ret = esp_a2d_source_init();
     if (ret != ESP_OK)
     {
@@ -560,34 +651,15 @@ void bt_a2dp_source_init(void)
         return;
     }
 
-    // Set device name
-    ret = esp_bt_gap_set_device_name(BT_DEVICE_NAME);
-
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Set device name failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Set connection and disconverable node
-    ret = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Set scan mode failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Start discovery failed %s", esp_err_to_name(ret));
+    // Initialize GAP functionality (device discovery, naming, scan mode)
+    ret = bt_gap_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "GAP initialization failed: %s", esp_err_to_name(ret));
         return;
     }
 
     ESP_LOGI(TAG, "A2DP source initialized successfully");
 }
-
-
 
 void app_main(void)
 {
