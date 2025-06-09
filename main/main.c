@@ -131,13 +131,13 @@ static void log_cache_state(void)
     ESP_LOGD(TAG, "Cache state: %d/%d devices, FIFO pointer at %d", 
              discovered_devices_count, CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE, discovered_devices_fifo_pointer);
     
+    // Print values in the c
     for (int i = 0; i < discovered_devices_count; i++)
     {
-        ESP_LOGD(TAG, "  [%d] %02x:%02x:%02x:%02x:%02x:%02x %s", i,
+        ESP_LOGD(TAG, "  [%d] %02x:%02x:%02x:%02x:%02x:%02x", i,
                  discovered_devices_cache[i].bda[0], discovered_devices_cache[i].bda[1], 
                  discovered_devices_cache[i].bda[2], discovered_devices_cache[i].bda[3],
-                 discovered_devices_cache[i].bda[4], discovered_devices_cache[i].bda[5],
-                 (i == discovered_devices_fifo_pointer && discovered_devices_count == CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE) ? "<-- next overwrite" : "");
+                 discovered_devices_cache[i].bda[4], discovered_devices_cache[i].bda[5]);
     }
 }
 
@@ -164,6 +164,12 @@ static const char* get_device_class_name(uint32_t major_class)
         case 0x07: return "Wearable";
         case 0x08: return "Toy";
         case 0x09: return "Health";
+        case 0x0a: return "Uncategorized";
+        case 0x0b: return "Reserved";
+        case 0x0c: return "Reserved";
+        case 0x0d: return "Computer";
+        case 0x0e: return "Reserved";
+        case 0x0f: return "Reserved";
         case 0x1F: return "Uncategorized";
         default: return "Unknown";
     }
@@ -291,7 +297,6 @@ static void device_processing_task(void *pvParameters)
 
             char device_name[64] = "Unknown";
 
-
             // Process device properties
             for (int i = 0; i < device.num_prop; i++)
             {
@@ -308,11 +313,17 @@ static void device_processing_task(void *pvParameters)
                 {
                     uint32_t cod = *(uint32_t *)prop->val;
 
-                    // Extract major device class from bits 8-12 of Class of Device
+                    // Extract classes from received information
                     // CoD format: [Service Classes][Major Device Class][Minor Device Class][Format]
                     //             bits 13-23        bits 8-12          bits 2-7         bits 0-1
                     uint32_t major_class = (cod & 0x1F00) >> 8;
-                    ESP_LOGI(TAG, "Class of Device: 0x%06lx, Major class: 0x%02lx", cod, major_class);
+                    uint32_t minor_class = (cod & 0x00FC) >> 2;      
+                    uint32_t service_class = (cod & 0xFFE000) >> 13; 
+                    
+                    ESP_LOGI(TAG, "Class of Device: 0x%06lx", cod);
+                    ESP_LOGI(TAG, "  Major class: 0x%02lx (%s)", major_class, get_device_class_name(major_class));
+                    ESP_LOGI(TAG, "  Minor class: 0x%02lx", minor_class);    
+                    ESP_LOGI(TAG, "  Service class: 0x%03lx", service_class);
 
                     // Extract major device class from bits 8-12 of Class of Device
                     // CoD format: [Service Classes][Major Device Class][Minor Device Class][Format]
