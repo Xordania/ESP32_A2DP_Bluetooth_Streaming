@@ -680,7 +680,7 @@ static esp_err_t bt_gap_init(void)
     }
 
     // Start device discovery (general inquiry for 10 seconds, unlimited responses)
-    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 30, 0);
+    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "Start discovery failed: %s", esp_err_to_name(ret));
