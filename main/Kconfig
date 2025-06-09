@@ -1,0 +1,78 @@
+menu "A2DP Source Configuration"
+    config A2DP_DISCOVERED_DEVICE_QUEUE_SIZE
+        int "Maximum number of devices in discovery queue"
+        range 5 50
+        default 10
+        help
+            This sets the maximum number of discovered Bluetooth devices that can be
+            queued for processing. In environments with many Bluetooth devices, you may
+            want to increase this value to avoid dropping discovered devices.
+            
+            Higher values use more memory but reduce the chance of missing devices.
+            Lower values use less memory but may drop devices in busy environments.
+
+    config A2DP_DEVICE_PROCESSING_TASK_STACK_SIZE
+        int "Device processing task stack size (bytes)"
+        range 2048 8192
+        default 4096
+        help
+            Stack size for the task that processes discovered Bluetooth devices.
+            Increase if you see stack overflow warnings. Decrease to save memory
+            if you're not doing complex device processing.
+
+    config A2DP_DEVICE_PROCESSING_TASK_PRIORITY
+        int "Device processing task priority"
+        range 1 10
+        default 5
+        help
+            Priority of the task that processes discovered devices.
+            Higher values give more CPU time to device processing.
+            Should be lower than Bluetooth stack priority but higher than
+            application tasks. Bluetooth stack typically runs at priority 6-7.
+
+    config A2DP_MAX_DEVICE_PROPERTIES
+        int "Maximum device properties to copy per device"
+        range 5 20
+        default 10
+        help
+            Maximum number of device properties to copy when a device is discovered.
+            This prevents buffer overflow if a device reports many properties.
+            Most devices report 3-5 properties, so 10 is usually sufficient.
+    
+    choice A2DP_DEVICE_PROCESSING_CORE
+        prompt "Device processing task core affinity"
+        default A2DP_CORE_APP
+        help
+            Choose which CPU core the device processing task should run on.
+            
+            - Any core: Let FreeRTOS scheduler decide (best for single-core ESP32 variants)
+            - Core 0 (PRO_CPU): Run with Bluetooth stack (may cause contention)
+            - Core 1 (APP_CPU): Run separately from Bluetooth stack (recommended)
+
+        config A2DP_CORE_ANY
+            bool "Any core (let FreeRTOS decide)"
+            help
+                Task can run on either core. Good for single-core ESP32 variants
+                or when you want maximum scheduling flexibility.
+                
+        config A2DP_CORE_PRO
+            bool "Core 0 (PRO_CPU)"
+            help
+                Pin task to Core 0 where Bluetooth stack runs. May cause
+                contention but ensures all Bluetooth operations on same core.
+                
+        config A2DP_CORE_APP
+            bool "Core 1 (APP_CPU)"
+            help
+                Pin task to Core 1, separate from Bluetooth stack. Recommended
+                for best performance and separation of concerns.
+    endchoice
+
+    # Takes the value in from the above A2DP_DEVICE_PROCESSING_CORE_ID uses it
+    config A2DP_DEVICE_PROCESSING_CORE_ID
+        int
+        default -1 if A2DP_CORE_ANY
+        default 0 if A2DP_CORE_PRO  
+        default 1 if A2DP_CORE_APP
+
+endmenu
