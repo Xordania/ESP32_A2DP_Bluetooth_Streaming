@@ -8,18 +8,19 @@
 
 void app_main(void)
 {
-    // The mem realease functions are currently not active. This is just future-proofing for now
-
     // If bluetooth class is initialize it
     #if CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY
-        bt_a2dp_source_init();
-        
         // Release unused memory back to the heap if using bluetooth classic only
+        // Has to be done before initialization
         ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+        
+        
+        bt_a2dp_source_init();
 
     // Both classic and BLE active
     #elif CONFIG_BTDM_CONTROLLER_MODE_BTDM
         bt_a2dp_source_init();
+
         //TODO: Activate BLE
 
     // Only BLE active

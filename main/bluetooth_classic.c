@@ -41,12 +41,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bluetooth_classic.h"
+#include "bluetooth_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_avrc_api.h"
+#include "esp_bt_defs.h"
 
 static const char *TAG = "A2DP_SOURCE";
 
@@ -580,59 +585,6 @@ static void log_config(){
 
 
 /**
- * @brief Initialize ESP32 Bluetooth Controller and Bluedroid Stack
- *
- * Performs the core ESP32 Bluetooth initialization including controller
- * configuration, controller enable, and Bluedroid stack initialization.
- * This function encapsulates all the low-level Bluetooth stack setup.
- *
- * The controller must be enabled first, then the Bluedroid protocol 
- * stack should be initialized and enabled.
- *
- * @return esp_err_t ESP_OK on success, error code on failure
- *
- * @note Controller is configured for Classic Bluetooth mode only
- * @note Requires CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY to be set
- */
-static esp_err_t esp_bt_stack_init(void)
-{
-    esp_err_t ret;
-
-    // Configure Bluetooth controller for Classic BT mode
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    bt_cfg.mode = ESP_BT_MODE_CLASSIC_BT;
-
-    // Initialize and enable Bluetooth controller
-    ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth controller initialize failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth controller enable failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Initialize and enable Bluedroid stack
-    ret = esp_bluedroid_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth stack init failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ret = esp_bluedroid_enable();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth stack enable failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "Bluetooth controller and stack initialized successfully");
-    return ESP_OK;
-}
-
-/**
  * @brief Initialize GAP (Generic Access Profile) functionality
  *
  * Sets up the Bluetooth Generic Access Profile including callback registration,
@@ -699,15 +651,13 @@ static esp_err_t bt_gap_init(void)
  * profile. This includes controller initialization, Bluedroid stack setup,
  * callback registration, and device discovery initiation.
  *
- * Initialization sequence:
- * 1. Creates device processing queue and background task
- * 2. Initializes NVS for Bluetooth pairing data storage
- * 3. Configures and enables Bluetooth controller (Classic mode only)
- * 4. Initializes and enables Bluedroid protocol stack
- * 5. Registers GAP and A2DP event callbacks
- * 6. Initializes A2DP source profile
- * 7. Sets device name and discoverable mode
- * 8. Starts device discovery to find audio devices
+ * A2DP Initialization sequence:
+ * 1. Create device discovery queue
+ * 2. Configure task core affinity
+ * 3. Create device processing background task
+ * 4. Register A2DP event callback
+ * 5. Initialize A2DP source profile
+ * 6. Initialize GAP functionality (device discovery, naming, scan mode)
  *
  * Configuration values are read from Kconfig settings for queue size,
  * task parameters, and device limits.
@@ -723,74 +673,66 @@ void bt_a2dp_source_init(void)
 
     log_config();
 
-    // Initialize NVS to store Bluetooth pairing data storage
-    ret = nvs_flash_init();
-
-    // If the storage is full then erase it and reinit
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-    {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    // Initialize NVS
+    ret = bt_nvs_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS initialization failed");
+        return;
     }
 
-    ESP_ERROR_CHECK(ret);
+    // Initialize Bluetooth stack for Classic BT
+    ret = bt_controller_stack_init(ESP_BT_MODE_CLASSIC_BT);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth stack initialization failed");
+        return;
+    }
 
-    // Create the queues and tasks for discovered devices
-    discovered_device_queue = xQueueCreate(CONFIG_A2DP_DISCOVERED_DEVICE_QUEUE_SIZE, sizeof(discovered_device_t));
-
-    if (discovered_device_queue == NULL)
-    {
+    // 1. Create device discovery queue
+    discovered_device_queue = xQueueCreate(CONFIG_A2DP_DISCOVERED_DEVICE_QUEUE_SIZE, 
+                                          sizeof(discovered_device_t));
+    if (discovered_device_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create discovered device queue");
         return;
     }
 
-    // tskNoAffinity maps to no core in particular, so if the user has no preference of the core used to
-    // do processing we let the idf decide
+    // 2. Configure task core affinity
+    // Handle Kconfig core selection: -1 means "any core"
     BaseType_t core_id = CONFIG_A2DP_DEVICE_PROCESSING_CORE_ID;
     if (core_id == -1) {
         core_id = tskNO_AFFINITY;
     }
 
+    // 3. Create device processing background task
     BaseType_t task_result = xTaskCreatePinnedToCore(
-        device_processing_task,
-        "bt_device_proc",
-        CONFIG_A2DP_DEVICE_PROCESSING_TASK_STACK_SIZE, 
-        NULL,
-        CONFIG_A2DP_DEVICE_PROCESSING_TASK_PRIORITY,
-        NULL,
-        core_id
+        device_processing_task,                              // Task function
+        "bt_device_proc",                                   // Task name
+        CONFIG_A2DP_DEVICE_PROCESSING_TASK_STACK_SIZE,     // Stack size
+        NULL,                                               // Parameters
+        CONFIG_A2DP_DEVICE_PROCESSING_TASK_PRIORITY,       // Priority
+        NULL,                                               // Task handle
+        core_id                                             // Core affinity
     );
 
-    if (task_result != pdPASS)
-    {
+    if (task_result != pdPASS) {
         ESP_LOGE(TAG, "Failed to create device processing task");
         return;
     }
 
-    // Initialize ESP32 Bluetooth controller and stack
-    ret = esp_bt_stack_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth stack initialization failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Register A2DP callback
+    // 4. Register A2DP event callback
     ret = esp_a2d_register_callback(bt_a2d_cb);
-    if (ret != ESP_OK)
-    {
+    if (ret != ESP_OK) {
         ESP_LOGE(TAG, "A2DP callback register failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    // Initialize A2DP source profile
+    // 5. Initialize A2DP source profile
     ret = esp_a2d_source_init();
-    if (ret != ESP_OK)
-    {
+    if (ret != ESP_OK) {
         ESP_LOGE(TAG, "A2DP source initialize failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    // Initialize GAP functionality (device discovery, naming, scan mode)
+    // 6. Initialize GAP functionality (device discovery, naming, scan mode)
     ret = bt_gap_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "GAP initialization failed: %s", esp_err_to_name(ret));

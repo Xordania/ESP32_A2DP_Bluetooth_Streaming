@@ -1,23 +1,11 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "nvs.h"
-#include "nvs_flash.h"
-#include "esp_system.h"
-#include "esp_log.h"
-#include "sdkconfig.h"
+
 #include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
-#include "esp_gap_bt_api.h"
 #include "esp_a2dp_api.h"
-#include "esp_avrc_api.h"
-#include "esp_bt_defs.h"
+#include "esp_gap_bt_api.h"
+
 
 #define BT_DEVICE_NAME "ESP32"
 
