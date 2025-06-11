@@ -38,6 +38,15 @@ menu "A2DP Source Configuration"
             Maximum number of device properties to copy when a device is discovered.
             This prevents buffer overflow if a device reports many properties.
             Most devices report 3-5 properties, so 10 is usually sufficient.
+    
+    config BLE_MAX_MANUFACTURER_DATA_LEN
+        int "Maximum manufacturer data length to store"
+        range 8 64
+        default 16
+        help
+            Maximum length of manufacturer-specific data to store per device.
+            Manufacturer data is optional advertisement data that companies
+            can include for proprietary purposes (beacons, sensor data, etc.).
 
     config A2DP_MAX_DISCOVERED_DEVICES_CACHE
         int "Maximum devices in discovery cache"
@@ -92,5 +101,90 @@ menu "A2DP Source Configuration"
         default -1 if A2DP_CORE_ANY
         default 0 if A2DP_CORE_PRO  
         default 1 if A2DP_CORE_APP
+
+endmenu
+
+menu "BLE Discovery Configuration"
+    config BLE_DISCOVERED_DEVICE_QUEUE_SIZE
+        int "Maximum number of devices in BLE discovery queue"
+        range 5 50
+        default 10
+        help
+            Maximum number of discovered BLE devices that can be queued for processing.
+            Higher values use more memory but reduce chance of dropping devices in
+            busy RF environments with many BLE advertisers.
+
+    config BLE_DEVICE_PROCESSING_TASK_STACK_SIZE
+        int "BLE device processing task stack size (bytes)"
+        range 2048 8192
+        default 4096
+        help
+            Stack size for the task that processes discovered BLE devices.
+            Increase if processing complex advertisement data or seeing stack overflow.
+
+    config BLE_DEVICE_PROCESSING_TASK_PRIORITY
+        int "BLE device processing task priority"
+        range 1 10
+        default 5
+        help
+            Priority of the BLE device processing task. Should be similar to
+            Classic Bluetooth processing task priority for balanced performance.
+
+    config BLE_MAX_DISCOVERED_DEVICES_CACHE
+        int "Maximum BLE devices in discovery cache"
+        range 5 50
+        default 10
+        help
+            Maximum number of discovered BLE devices to cache for duplicate detection.
+            Each cached device uses approximately 150 bytes.
+
+    config BLE_MAX_DEVICE_NAME_LEN
+        int "Maximum BLE device name length"
+        range 16 128
+        default 64
+        help
+            Maximum length for BLE device names extracted from advertisement data.
+
+    config BLE_MAX_SERVICES_PER_DEVICE
+        int "Maximum service UUIDs per device"
+        range 4 16
+        default 8
+        help
+            Maximum number of 16-bit service UUIDs to store per discovered device.
+
+choice BLE_DEVICE_PROCESSING_CORE
+    prompt "BLE device processing task core affinity"
+    default BLE_CORE_APP  # <-- Changed to match Classic BT default
+    help
+        Choose which CPU core the BLE device processing task should run on.
+        
+        - Any core: Let FreeRTOS scheduler decide (best for single-core ESP32 variants)
+        - Core 0 (PRO_CPU): Run with Bluetooth stack (may cause contention)
+        - Core 1 (APP_CPU): Run separately from Bluetooth stack (recommended)
+
+    config BLE_CORE_ANY
+        bool "Any core (let FreeRTOS decide)"
+        help
+            Task can run on either core. Good for single-core ESP32 variants
+            or when you want maximum scheduling flexibility.
+            
+    config BLE_CORE_PRO
+        bool "Core 0 (PRO_CPU)"
+        help
+            Pin task to Core 0 where Bluetooth stack runs. May cause
+            contention but ensures all Bluetooth operations on same core.
+            
+    config BLE_CORE_APP
+        bool "Core 1 (APP_CPU)"
+        help
+            Pin task to Core 1, separate from Bluetooth stack. Recommended
+            for best performance and separation of concerns.
+endchoice
+
+    config BLE_DEVICE_PROCESSING_CORE_ID
+        int
+        default -1 if BLE_CORE_ANY
+        default 0 if BLE_CORE_PRO  
+        default 1 if BLE_CORE_APP
 
 endmenu

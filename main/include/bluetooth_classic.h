@@ -1,5 +1,5 @@
-#ifndef MAIN_H
-#define MAIN_H
+#ifndef BLUETOOTH_CLASSIC_H
+#define BLUETOOTH_CLASSIC_H
 
 
 #include "esp_bt.h"
@@ -32,4 +32,4 @@ typedef struct {
 #endif
 
 
-#endif // MAIN_H
+#endif // BLUETOOTH_CLASSIC_H

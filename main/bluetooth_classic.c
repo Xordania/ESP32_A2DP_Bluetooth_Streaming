@@ -51,6 +51,7 @@
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
 #include "esp_avrc_api.h"
+#include "esp_gap_bt_api.h"
 #include "esp_bt_defs.h"
 
 static const char *TAG = "A2DP_SOURCE";
