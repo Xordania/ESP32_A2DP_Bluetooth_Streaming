@@ -26,7 +26,7 @@ typedef struct {
     uint8_t manufacturer_data_len;                                      // Length of manufacturer data
     
     int8_t tx_power;                                                    // Advertised TX power level
-            
+
     // Raw advertisement data (for advanced processing)     
     uint8_t adv_data_len;                                               // Advertisement data length
     uint8_t scan_rsp_len;                                               // Scan response data length
@@ -34,7 +34,7 @@ typedef struct {
 
 // Function declarations
 #if CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
-
+    esp_err_t ble_discovery_init(void);
 #endif // CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
 
 #endif // BLUETOOTH_BLE_H

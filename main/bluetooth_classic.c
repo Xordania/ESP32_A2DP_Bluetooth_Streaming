@@ -108,12 +108,12 @@ static void add_device_to_cache(discovered_device_t *device)
         // Cache is full, overwrite oldest entry using FIFO pointer
         memcpy(&discovered_devices_cache[discovered_devices_fifo_pointer], device, sizeof(discovered_device_t));
         
+        ESP_LOGD(TAG, "Cache full, overwrote device at index %d, next overwrite at %d", 
+                discovered_devices_fifo_pointer);
+
         // Advance FIFO pointer with wrap-around
         discovered_devices_fifo_pointer = (discovered_devices_fifo_pointer + 1) % CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE;
         
-        ESP_LOGD(TAG, "Cache full, overwrote device at index %d, next overwrite at %d", 
-                 (discovered_devices_fifo_pointer - 1 + CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE) % CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE,
-                 discovered_devices_fifo_pointer);
     }
 }
 
