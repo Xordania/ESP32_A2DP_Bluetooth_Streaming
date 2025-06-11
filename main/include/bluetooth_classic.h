@@ -1,6 +1,9 @@
+#include "sdkconfig.h"
+
+#if CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
+
 #ifndef BLUETOOTH_CLASSIC_H
 #define BLUETOOTH_CLASSIC_H
-
 
 #include "esp_bt.h"
 #include "esp_a2dp_api.h"
@@ -13,7 +16,7 @@
 typedef struct {
     esp_bd_addr_t bda;
     int num_prop;
-    esp_bt_gap_dev_prop_t props[CONFIG_A2DP_MAX_DEVICE_PROPERTIES];
+    esp_bt_gap_dev_prop_t props[COFNIG_A2DP_MAX_DEVICE_PROPERTIES];
 } discovered_device_t;
 
 // Structure to hold parsed audio configuration
@@ -33,3 +36,4 @@ typedef struct {
 
 
 #endif // BLUETOOTH_CLASSIC_H
+#endif // CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM

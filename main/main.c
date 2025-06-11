@@ -5,6 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "esp_err.h"
+#include "esp_bt.h"
 
 void app_main(void)
 {
