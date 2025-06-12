@@ -440,13 +440,6 @@ esp_err_t ble_start_device_discovery(uint32_t scan_duration){
         .scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE    // Report all packets (including duplicates)
     };
 
-    // Register GAP (Gerneric Access Profile) callback for BLE events
-    ret = esp_ble_gap_register_callback(ble_gap_cb);
-    if(ret != ESP_OK){
-        ESP_LOGE(TAG, "BLE GAP callback register failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
     // Set scan parameters - this will trigger ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT
     ret = esp_ble_gap_set_scan_params(&ble_scan_params);
     if (ret != ESP_OK) {
@@ -470,6 +463,8 @@ esp_err_t ble_start_device_discovery(uint32_t scan_duration){
 
 esp_err_t ble_discovery_init(void)
 {
+    esp_err_t ret;
+    
     ESP_LOGI(TAG, "Initializing BLE Device Discovery");
 
     // Create device discovery queue
@@ -504,6 +499,13 @@ esp_err_t ble_discovery_init(void)
     {
         ESP_LOGE(TAG, "Failed to create BLE device processing task");
         return ESP_ERR_NO_MEM;
+    }
+
+        // Register GAP (Gerneric Access Profile) callback for BLE events
+    ret = esp_ble_gap_register_callback(ble_gap_cb);
+    if(ret != ESP_OK){
+        ESP_LOGE(TAG, "BLE GAP callback register failed: %s", esp_err_to_name(ret));
+        return ret;
     }
 
     ESP_LOGI(TAG, "BLE device discovery initialized successfully");
