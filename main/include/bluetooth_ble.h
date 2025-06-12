@@ -35,6 +35,8 @@ typedef struct {
 // Function declarations
 #if CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
     esp_err_t ble_discovery_init(void);
+    esp_err_t ble_start_device_discovery(uint32_t scan_duration);
+    esp_err_t ble_stop_device_discovery(void);
 #endif // CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
 
 #endif // BLUETOOTH_BLE_H

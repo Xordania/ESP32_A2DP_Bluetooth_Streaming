@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bluetooth_classic.h"
+#include "bluetooth_ble.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -29,6 +30,8 @@ void app_main(void)
     #elif CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY
         // Release unused memory back to the heap if using bluetooth low energy only
         ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+        ESP_ERROR_CHECK(ble_discovery_init());
+        ESP_ERROR_CHECK(ble_start_device_discovery(30));
 
     // Neither versions of bluetooth are active. Clear the memory
     #else
