@@ -38,6 +38,8 @@ void app_main(void)
         // Release unused Classic BT memory back to the heap
         ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     
+        bt_nvs_init();
+
         // Initialize BLE stack first
         ret = bt_controller_stack_init(ESP_BT_MODE_BLE);
         if (ret != ESP_OK) {

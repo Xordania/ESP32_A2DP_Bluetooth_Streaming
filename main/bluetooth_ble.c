@@ -266,10 +266,10 @@ static void ble_device_processing_task(void *pvParameters)
                          device.bda[0], device.bda[1], device.bda[2],
                          device.bda[3], device.bda[4], device.bda[5]);
                 continue;
+            }else{
+                log_ble_device_info(&device);
+                add_ble_device_to_cache(&device);
             }
-
-            log_ble_device_info(&device);
-            add_ble_device_to_cache(&device);
         }
     }
 }
@@ -437,7 +437,7 @@ esp_err_t ble_start_device_discovery(uint32_t scan_duration){
         .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,    // Accept all advertisements
         .scan_interval      = 0x50,                         // 50ms scan interval (0x50 * 0.625ms = 50ms)
         .scan_window        = 0x30,                         // 30ms scan window (0x30 * 0.625ms = 30ms)
-        .scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE    // Report all packets (including duplicates)
+        .scan_duplicate     = BLE_SCAN_DUPLICATE_ENABLE    // Report all packets (including duplicates)
     };
 
     // Set scan parameters - this will trigger ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT
