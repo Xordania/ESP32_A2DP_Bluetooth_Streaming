@@ -1,7 +1,8 @@
 #ifndef BLUETOOTH_UUID_DEFINITIONS_H
 #define BLUETOOTH_UUID_DEFINITIONS_H
 
-#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
 /**
  * @brief Classic Bluetooth Audio Service UUIDs
@@ -90,4 +91,170 @@ typedef enum {
     BT_COMPANY_ID_MICROSOFT         = 0x0006,  // Microsoft Corporation
 } bt_company_id_t;
 
-#endif
+// ========================================= Lookup Tables =========================================
+
+// Array of valid Classic Bluetooth audio service UUIDs
+// Sorted in ascending order for potential binary search optimization.
+static const uint16_t classic_audio_uuids[] = {
+    BT_UUID_HEADSET,                 // 0x1108
+    BT_UUID_A2DP_SOURCE,             // 0x110A
+    BT_UUID_A2DP_SINK,               // 0x110B
+    BT_UUID_AVRCP_TARGET,            // 0x110C
+    BT_UUID_AVRCP_CONTROLLER,        // 0x110E
+    BT_UUID_HEADSET_AUDIO_GATEWAY,   // 0x1112
+    BT_UUID_HANDSFREE,               // 0x111E
+    BT_UUID_HANDSFREE_AUDIO_GATEWAY, // 0x111F
+    BT_UUID_GENERIC_AUDIO,           // 0x1203
+};
+
+
+#define CLASSIC_AUDIO_UUID_COUNT (sizeof(classic_audio_uuids) / sizeof(classic_audio_uuids[0]))
+
+/**
+ * @brief Array of valid BLE Audio service UUIDs
+ * 
+ * Covers the main BLE Audio specification services.
+ */
+static const uint16_t ble_audio_uuids[] = {
+    BLE_UUID_AUDIO_INPUT_CONTROL,    // 0x1843
+    BLE_UUID_VOLUME_CONTROL,         // 0x1844
+    BLE_UUID_VOLUME_OFFSET_CONTROL,  // 0x1845
+    BLE_UUID_COORDINATED_SET_ID,     // 0x1846
+    BLE_UUID_MEDIA_CONTROL,          // 0x1848
+    BLE_UUID_GENERIC_MEDIA_CONTROL,  // 0x1849
+    BLE_UUID_AUDIO_STREAM_CONTROL,   // 0x184E
+    BLE_UUID_BROADCAST_AUDIO_SCAN,   // 0x184F
+    BLE_UUID_PUBLISHED_AUDIO_CAP,    // 0x1850
+};
+
+#define BLE_AUDIO_UUID_COUNT (sizeof(ble_audio_uuids) / sizeof(ble_audio_uuids[0]))
+
+
+/**
+ * @brief Structure for UUID to name mapping
+ */
+typedef struct {
+    uint16_t uuid;
+    const char* name;
+} uuid_name_map_t;
+
+/**
+ * @brief Classic Bluetooth audio service name lookup table
+ * 
+ * Cleaner than switch statements - just add new entries here.
+ */
+static const uuid_name_map_t classic_audio_names[] = {
+    {BT_UUID_HEADSET,                 "Headset"},
+    {BT_UUID_A2DP_SOURCE,             "A2DP Source"},
+    {BT_UUID_A2DP_SINK,               "A2DP Sink"},
+    {BT_UUID_AVRCP_TARGET,            "AVRCP Target"},
+    {BT_UUID_AVRCP_CONTROLLER,        "AVRCP Controller"},
+    {BT_UUID_HEADSET_AUDIO_GATEWAY,   "Headset Audio Gateway"},
+    {BT_UUID_HANDSFREE,               "Hands-Free"},
+    {BT_UUID_HANDSFREE_AUDIO_GATEWAY, "Hands-Free Audio Gateway"},
+    {BT_UUID_GENERIC_AUDIO,           "Generic Audio"},
+};
+
+#define CLASSIC_AUDIO_NAMES_COUNT (sizeof(classic_audio_names) / sizeof(classic_audio_names[0]))
+
+
+/**
+ * @brief BLE Audio service name lookup table
+ */
+static const uuid_name_map_t ble_audio_names[] = {
+    {BLE_UUID_AUDIO_INPUT_CONTROL,    "Audio Input Control Service"},
+    {BLE_UUID_VOLUME_CONTROL,         "Volume Control Service"},
+    {BLE_UUID_VOLUME_OFFSET_CONTROL,  "Volume Offset Control Service"},
+    {BLE_UUID_COORDINATED_SET_ID,     "Coordinated Set Identification Service"},
+    {BLE_UUID_MEDIA_CONTROL,          "Media Control Service"},
+    {BLE_UUID_GENERIC_MEDIA_CONTROL,  "Generic Media Control Service"},
+    {BLE_UUID_AUDIO_STREAM_CONTROL,   "Audio Stream Control Service"},
+    {BLE_UUID_BROADCAST_AUDIO_SCAN,   "Broadcast Audio Scan Service"},
+    {BLE_UUID_PUBLISHED_AUDIO_CAP,    "Published Audio Capabilities Service"},
+};
+
+#define BLE_AUDIO_NAMES_COUNT (sizeof(ble_audio_names) / sizeof(ble_audio_names[0]))
+
+/**
+ * @brief Company ID to name lookup table
+ */
+static const struct {
+    bt_company_id_t company_id;
+    const char* name;
+} 
+
+company_names[] = {
+    {BT_COMPANY_ID_APPLE,       "Apple Inc."},
+    {BT_COMPANY_ID_SAMSUNG,     "Samsung Electronics"},
+    {BT_COMPANY_ID_SONY,        "Sony Corporation"},
+    {BT_COMPANY_ID_HARMAN,      "Harman International (JBL/AKG)"},
+    {BT_COMPANY_ID_BOSE,        "Bose Corporation"},
+    {BT_COMPANY_ID_BEATS,       "Beats Electronics"},
+    {BT_COMPANY_ID_SENNHEISER,  "Sennheiser Communications"},
+    {BT_COMPANY_ID_GOOGLE,      "Google Inc."},
+    {BT_COMPANY_ID_MICROSOFT,   "Microsoft Corporation"},
+};
+
+#define COMPANY_NAMES_COUNT (sizeof(company_names) / sizeof(company_names[0]))
+
+
+// ========================================= Function Definnitions =========================================
+
+
+/**
+ * @brief Check if UUID represents a Classic Bluetooth audio service
+ * 
+ * @param uuid 16-bit service UUID to check
+ * @return true if UUID is a Classic Bluetooth audio service
+ */
+bool is_classic_audio_service(uint16_t uuid);
+
+/**
+ * @brief Check if UUID represents a BLE Audio service
+ * 
+ * @param uuid 16-bit service UUID to check
+ * @return true if UUID is a BLE Audio service
+ */
+bool is_ble_audio_service(uint16_t uuid);
+
+/**
+ * @brief Get human-readable name for Classic Bluetooth audio service UUID
+ * 
+ * @param uuid Service UUID (cast to bt_classic_audio_uuid_t for type safety)
+ * @return String description of the service, valid for lifetime of program
+ */
+const char* get_classic_audio_service_name(bt_classic_audio_uuid_t uuid);
+
+/**
+ * @brief Get human-readable name for BLE Audio service UUID
+ * 
+ * @param uuid Service UUID (cast to ble_audio_uuid_t for type safety)
+ * @return String description of the service, valid for lifetime of program
+ */
+const char* get_ble_audio_service_name(ble_audio_uuid_t uuid);
+
+/**
+ * @brief Get human-readable name for company ID
+ * 
+ * @param company_id Bluetooth SIG assigned company identifier
+ * @return String name of the company, valid for lifetime of program
+ */
+const char* get_company_name(bt_company_id_t company_id);
+
+/**
+ * @brief Get count of known Classic Bluetooth audio services
+ * 
+ * Useful for iterating through all known services or validation.
+ * 
+ * @return Number of Classic Bluetooth audio services in lookup table
+ */
+size_t get_classic_audio_service_count(void);
+
+/**
+ * @brief Get count of known BLE Audio services
+ * 
+ * @return Number of BLE Audio services in lookup table
+ */
+size_t get_ble_audio_service_count(void);
+
+#endif // BLUETOOTH_UUID_DEFINITIONS_H
