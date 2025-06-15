@@ -111,16 +111,20 @@ static ble_analysis_state_t* allocate_analysis_state(void)
  */
 static void free_analysis_state(ble_analysis_state_t *state)
 {
-    if (state) {
-        // Disconnect if we own the connection
-        if (state->connected && state->own_connection && 
-            state->gattc_if != ESP_GATT_IF_NONE) {
-            ESP_LOGI(TAG, "Closing connection to device");
-            esp_ble_gattc_close(state->gattc_if, state->conn_id);
-        }
-        
-        state->in_use = false;
+    if(!state || !state->in_use){
+        ESP_LOGW(TAG, "Attempted to free invalid or unsused analysis state");
+        return;
     }
+
+        ESP_LOGI(TAG, "Freeing analysis state for device %02x:%02x:%02x:%02x:%02x:%02x",
+            state->bda[0], state->bda[1], state->bda[2],
+            state->bda[3], state->bda[4], state->bda[5]);
+
+    // Mark as not in use and clear the data. The disconnect event will handle the clean up
+    memset(state, 0, sizeof(ble_analysis_state_t));
+    state->in_use = false;
+    state->gattc_if = ESP_GATT_IF_NONE;
+    state->conn_id = 0xFFFF;
 }
 
 /**
@@ -185,8 +189,19 @@ static void complete_analysis(ble_analysis_state_t *state)
 {
     // Check there is analysis happening on the passed state
     if (!state || !state->in_use) {
+        ESP_LOGW(TAG, "Attempted to complete invalid analysis");
         return;
     }
+
+    // Prevents completion firing twice
+    if (state->result.analysis_complete) {
+        ESP_LOGW(TAG, "Analysis already completed for this device");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Completing analysis for device %02x:%02x:%02x:%02x:%02x:%02x",
+             state->bda[0], state->bda[1], state->bda[2],
+             state->bda[3], state->bda[4], state->bda[5]);
     
     state->result.analysis_complete = true;
     
@@ -205,13 +220,34 @@ static void complete_analysis(ble_analysis_state_t *state)
     ESP_LOGI(TAG, "  Capabilities: %s", 
              ble_audio_capabilities_to_string(state->result.audio_capabilities));
     
-    // Invoke callback with results
-    if (state->callback) {
-        state->callback(&state->result);
+    // Make a copy of the callback and result before requesting disconnect
+    ble_device_analysis_cb_t callback = state->callback;
+    ble_device_analysis_result_t result_copy = state->result;
+
+
+    // Request disconnect if we own the connection
+    if (state->connected && state->own_connection && 
+        state->gattc_if != ESP_GATT_IF_NONE && 
+        state->conn_id != 0xFFFF) {
+        
+        ESP_LOGI(TAG, "Requesting disconnect from device (conn_id: %d)", state->conn_id);
+        esp_err_t ret = esp_ble_gattc_close(state->gattc_if, state->conn_id);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to request disconnect: %s", esp_err_to_name(ret));
+            // If disconnect fails, free state immediately and call callback
+            free_analysis_state(state);
+            if (callback) {
+                callback(&result_copy);
+            }
+        }
+        // If disconnect succeeds, the disconnect event will handle cleanup and callback
+    } else {
+        // No connection to close, free state immediately and call callback
+        free_analysis_state(state);
+        if (callback) {
+            callback(&result_copy);
+        }
     }
-    
-    // Free state (will disconnect if needed)
-    free_analysis_state(state);
 }
 
 /**
@@ -367,17 +403,38 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         xSemaphoreTake(analyzer_state.mutex, portMAX_DELAY);
         state = find_analysis_by_address(param->disconnect.remote_bda);
         
-        state->connected = false;
-        
-        // If discovery wasn't completed, complete analysis now
-        if (!state->result.analysis_complete) {
-            ESP_LOGW(TAG, "Disconnected before analysis complete");
-            complete_analysis(state);
+        if(state && state->in_use){
+            ESP_LOGI(TAG, "Hanlding disconnect for analysis state");
+
+            // Make copies before freeign state
+            ble_device_analysis_cb_t callback = state->callback;
+            ble_device_analysis_result_t result_copy = state->result;
+            bool analysis_was_complete = state->result.analysis_complete;
+
+            // Mark as disconnected
+            state->connected = false;
+
+            // If analysis wasn't completed, mark as failed
+            if(!analysis_was_complete){
+                ESP_LOGW(TAG, "Disconnected before analysis complete - marking as failed");
+                result_copy.analysis_complete = true;
+                result_copy.connection_failed = true;
+            }
+
+            // Free the state
+            free_analysis_state(state);
+
+            // Call callback with results (only if analysis was complete or we're reporting failure)
+            if(callback && (analysis_was_complete || result_copy.connection_failed)){
+                callback(&result_copy);
+            }
+        }else{
+            ESP_LOGD(TAG, "Disconenct event for unknown or already free device");
         }
-    
+        
         xSemaphoreGive(analyzer_state.mutex);
         break;
-        
+
     default:
         break;
     }
