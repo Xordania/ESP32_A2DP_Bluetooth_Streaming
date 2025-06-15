@@ -5,6 +5,9 @@
  * Analyzes BLE devices to determine their audio streaming capabilities by
  * performing GATT service discovery. Focuses on identifying LE Audio services
  * as well as proprietary audio streaming services.
+ * 
+ * It has the ability to find Classic Bluetooth services even if they were found over 
+ * BLE. This is useful for many streaming devices that act in this manner.
  *
  * Architecture:
  * - Maintains analysis state for multiple devices concurrently
