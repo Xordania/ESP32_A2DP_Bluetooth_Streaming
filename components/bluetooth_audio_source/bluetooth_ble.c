@@ -14,6 +14,15 @@
 
 static const char *TAG = "BLE_DISCOVERY";
 
+/**
+ * @brief Define the event base for BLE discovery
+ */
+ESP_EVENT_DEFINE_BASE(BLE_DISCOVERY_EVENTS);
+
+// ============================================================================
+// MODULE STATE AND STATISTICS
+// ============================================================================
+
 // Queue for discovered BLE devices
 static QueueHandle_t discovered_ble_device_queue = NULL;
 
@@ -24,6 +33,171 @@ static int discovered_ble_devices_fifo_pointer = 0;
 
 // Scanning state
 static bool is_scanning = false;
+
+static struct {
+    bool events_enabled;                // Are events initialized?
+    uint32_t current_session_id;        // Current discovery session ID
+    uint32_t devices_in_session;        // Devices found in current session
+    uint32_t total_devices_found;       // Total devices found across all sessions
+    uint32_t total_scan_sessions;       // Total number of scan sessions
+    TickType_t session_start_time;      // When current session started
+    uint32_t configured_scan_duration;  // Configured scan duration for current session
+} discovery_stats = {
+    .events_enabled = false,
+    .current_session_id = 0,
+    .devices_in_session = 0,
+    .total_devices_found = 0,
+    .total_scan_sessions = 0
+};
+
+
+// ============================================================================
+// EVENT POSTING FUNCTIONS
+// ============================================================================
+/**
+ * @brief Post device discovered event
+ * 
+ * Posts BLE_DISCOVERY_DEVICE_FOUND event with complete device information.
+ */
+static void post_device_discovered_event(const discovered_ble_device_t *device, bool is_duplicate)
+{
+    if (!discovery_stats.events_enabled) {
+        ESP_LOGD(TAG, "Events not enabled, skipping device discovered event");
+        return;
+    }
+
+    // Increment counters
+    if (!is_duplicate) {
+        discovery_stats.devices_in_session++;
+        discovery_stats.total_devices_found++;
+    }
+
+    // Create event data
+    ble_device_found_event_data_t event_data = {
+        .device = *device,
+        .is_duplicate = is_duplicate,
+        .discovery_count = discovery_stats.devices_in_session,
+        .session_id = discovery_stats.current_session_id
+    };
+
+    // Post event
+    esp_err_t ret = esp_event_post(BLE_DISCOVERY_EVENTS,
+                                  BLE_DISCOVERY_DEVICE_FOUND,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);  // 100ms timeout
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post device discovered event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGD(TAG, "Posted device discovered event for session %lu", discovery_stats.current_session_id);
+    }
+}
+
+/**
+ * @brief Post discovery started event
+ */
+static void post_discovery_started_event(const esp_ble_scan_params_t *scan_params)
+{
+    if (!discovery_stats.events_enabled) {
+        return;
+    }
+
+    // Start new session
+    discovery_stats.current_session_id++;
+    discovery_stats.devices_in_session = 0;
+    discovery_stats.total_scan_sessions++;
+    discovery_stats.session_start_time = xTaskGetTickCount();
+
+    // Create event data
+    ble_discovery_started_event_data_t event_data = {
+        .scan_duration_sec = discovery_stats.configured_scan_duration,
+        .session_id = discovery_stats.current_session_id,
+        .scan_params = *scan_params
+    };
+
+    esp_err_t ret = esp_event_post(BLE_DISCOVERY_EVENTS,
+                                  BLE_DISCOVERY_STARTED,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post discovery started event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Posted discovery started event - session %lu", discovery_stats.current_session_id);
+    }
+}
+
+/**
+ * @brief Post discovery stopped event
+ */
+static void post_discovery_stopped_event(esp_err_t stop_reason)
+{
+    if (!discovery_stats.events_enabled) {
+        return;
+    }
+
+    // Calculate session duration
+    TickType_t session_duration = xTaskGetTickCount() - discovery_stats.session_start_time;
+    uint32_t duration_ms = session_duration * portTICK_PERIOD_MS;
+
+    // Create event data
+    ble_discovery_stopped_event_data_t event_data = {
+        .total_devices_found = discovery_stats.devices_in_session,
+        .scan_duration_ms = duration_ms,
+        .session_id = discovery_stats.current_session_id,
+        .stop_reason = stop_reason
+    };
+
+    esp_err_t ret = esp_event_post(BLE_DISCOVERY_EVENTS,
+                                  BLE_DISCOVERY_STOPPED,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post discovery stopped event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Posted discovery stopped event - session %lu, %lu devices, %lu ms", 
+                 discovery_stats.current_session_id, 
+                 discovery_stats.devices_in_session,
+                 duration_ms);
+    }
+}
+
+/**
+ * @brief Post discovery error event
+ */
+static void post_discovery_error_event(esp_err_t error_code, const char* description, ble_discovery_event_id_t failed_op)
+{
+    if (!discovery_stats.events_enabled) {
+        return;
+    }
+
+    ble_discovery_error_event_data_t event_data = {
+        .error_code = error_code,
+        .error_description = description,
+        .failed_operation = failed_op
+    };
+
+    esp_err_t ret = esp_event_post(BLE_DISCOVERY_EVENTS,
+                                  BLE_DISCOVERY_ERROR,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post discovery error event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGE(TAG, "Posted discovery error event: %s", description);
+    }
+}
+
+// ============================================================================
+// BLE Fucntionality
+// ============================================================================
+
 
 /**
  * @brief Log detailed information about a discovered BLE device
