@@ -244,40 +244,32 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         // Ensure that nothing else can make changes this analyzer while checking connections
         xSemaphoreTake(analyzer_state.mutex, portMAX_DELAY);
         state = find_analysis_by_address(param->connect.remote_bda);
+
+        state->conn_id = param->connect.conn_id;
+        state->gattc_if = gattc_if;
+        state->connected = true;
         
-        // Double check connection has worked then save the parameters
-        if (state == ESP_GATT_OK) {
-            state->conn_id = param->connect.conn_id;
-            state->gattc_if = gattc_if;
-            state->connected = true;
-            
-            // Store connection parameters
-            state->result.conn_interval = param->connect.conn_params.interval;
-            state->result.conn_latency = param->connect.conn_params.latency;
-            state->result.supervision_timeout = param->connect.conn_params.timeout;
-            
-            ESP_LOGI(TAG, "Connection params - interval: %d, latency: %d, timeout: %d",
-                     state->result.conn_interval,
-                     state->result.conn_latency,
-                     state->result.supervision_timeout);
-            
-            // Start service discovery
-            ESP_LOGI(TAG, "Starting service discovery...");
-            esp_err_t ret = esp_ble_gattc_search_service(gattc_if, param->connect.conn_id, NULL);
+        // Store connection parameters
+        state->result.conn_interval = param->connect.conn_params.interval;
+        state->result.conn_latency = param->connect.conn_params.latency;
+        state->result.supervision_timeout = param->connect.conn_params.timeout;
+        
+        ESP_LOGI(TAG, "Connection params - interval: %d, latency: %d, timeout: %d",
+                    state->result.conn_interval,
+                    state->result.conn_latency,
+                    state->result.supervision_timeout);
+        
+        // Start service discovery
+        ESP_LOGI(TAG, "Starting service discovery...");
+        esp_err_t ret = esp_ble_gattc_search_service(gattc_if, param->connect.conn_id, NULL);
 
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Service discovery start failed: %s", esp_err_to_name(ret));
-                complete_analysis(state);
-            } else {
-                state->discovery_in_progress = true;
-            }
-
-        } else if (state) {
-            ESP_LOGE(TAG, "Connection failed, conn_id %d", param->connect.conn_id);
-            state->result.connection_failed = true;
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Service discovery start failed: %s", esp_err_to_name(ret));
             complete_analysis(state);
+        } else {
+            state->discovery_in_progress = true;
         }
-        
+
         xSemaphoreGive(analyzer_state.mutex);
         break;
         
