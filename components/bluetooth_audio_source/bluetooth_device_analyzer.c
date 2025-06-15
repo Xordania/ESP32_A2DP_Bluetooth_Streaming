@@ -515,6 +515,27 @@ bool ble_device_supports_audio(const ble_device_analysis_result_t *result)
     return result->audio_capabilities != BLE_AUDIO_CAP_NONE;
 }
 
+/**
+ * @brief Check if device supports modern BLE Audio (LE Audio)
+ */
+bool ble_device_has_le_audio(const ble_device_analysis_result_t *result)
+{
+    if (!result || !result->analysis_complete) {
+        return false;
+    }
+    
+    // Check for core LE Audio services
+    // According to LE Audio spec, both ASCS and PACS are mandatory
+    uint32_t required_caps = BLE_AUDIO_CAP_AUDIO_STREAM_CTL | BLE_AUDIO_CAP_PUBLISHED_AUDIO;
+    
+    // Check if device has both required capabilities
+    if ((result->audio_capabilities & required_caps) == required_caps) {
+        return true;
+    }
+    
+    return false;
+}
+
 /*
  * @brief Get human-readable string for capabilities
  */

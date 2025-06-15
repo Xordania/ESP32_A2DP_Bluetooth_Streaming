@@ -443,6 +443,8 @@ static void ble_device_processing_task(void *pvParameters)
             }else{
                 log_ble_device_info(&device);
                 add_ble_device_to_cache(&device);
+
+                post_device_discovered_event(&device, false);
             }
         }
     }
@@ -517,6 +519,9 @@ static void handle_ble_scan_result(esp_ble_gap_cb_param_t *param){
  * @param param Event-specific parameter data
  */
 static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param){
+    // Store parameters for event posting
+    static esp_ble_scan_params_t current_scan_params = {0};
+
     switch(event){
         case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
             // The scan parameters have been set successfully
@@ -526,6 +531,7 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             esp_err_t ret = esp_ble_gap_start_scanning(30); // 30 seconds scan. TODO: Make this configurable
             if(ret != ESP_OK){
                 ESP_LOGE(TAG, "BLE start scanning failed: %s", esp_err_to_name(ret));
+                post_discovery_error_event(ret, "Failed to start BLE scanning", BLE_DISCOVERY_STARTED);
             }
             break;
         
@@ -536,8 +542,11 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             if(param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS){
                 ESP_LOGI(TAG, "BLE scanning started successfully");
                 is_scanning = true;
+
+                post_discovery_started_event(&current_scan_params);
             }else{
                 ESP_LOGE(TAG, "BLE scanning start failed, status: %d", param->scan_start_cmpl.status);
+                post_discovery_error_event(ESP_FAIL, "BLE scan start failed", BLE_DISCOVERY_STARTED);
             }
             break;
         
@@ -551,9 +560,19 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             if(param->scan_stop_cmpl.status == ESP_BT_STATUS_SUCCESS){
                 ESP_LOGI(TAG, "BLE scanning stopped successfully");
                 is_scanning = false;
+
+                post_discovery_stopped_event(ESP_OK);
             }else{
                 ESP_LOGE(TAG, "BLE scanning stop failed, status: %d", param->scan_stop_cmpl.status);
+                post_discovery_error_event(ESP_FAIL, "BLE scan stop failed", BLE_DISCOVERY_STOPPED);
             }
+            break;
+
+        case ESP_GAP_BLE_SCAN_TIMEOUT_EVT:
+            ESP_LOGI(TAG, "BLE scan timeout reached");
+            is_scanning = false;
+            
+            post_discovery_stopped_event(ESP_ERR_TIMEOUT);
             break;
         default:
             ESP_LOGI(TAG, "BLE GAP event: %d", event);
@@ -604,6 +623,8 @@ esp_err_t ble_start_device_discovery(uint32_t scan_duration){
         return ESP_ERR_INVALID_STATE;
     }
 
+    discovery_stats.configured_scan_duration = scan_duration;
+
     // Configure scan parameters for device discovery
     static esp_ble_scan_params_t ble_scan_params ={
         .scan_type          = BLE_SCAN_TYPE_ACTIVE,         // Active scanning gets scan response data
@@ -641,6 +662,17 @@ esp_err_t ble_discovery_init(void)
     
     ESP_LOGI(TAG, "Initializing BLE Device Discovery");
 
+    // Scan to ensure teh default loops exists before starting the discovery process
+    ret = esp_event_post(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, NULL, 0, 0);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Default event loop not created! Call esp_event_loop_create_default() first");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Enable event positing
+    discovery_stats.events_enabled = true;
+    ESP_LOGI(TAG, "ESP Event posting enabled for BLE discovery");
+
     // Create device discovery queue
     discovered_ble_device_queue = xQueueCreate(CONFIG_BLE_DISCOVERED_DEVICE_QUEUE_SIZE,
                                                sizeof(discovered_ble_device_t));
@@ -675,7 +707,7 @@ esp_err_t ble_discovery_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-        // Register GAP (Gerneric Access Profile) callback for BLE events
+    // Register GAP (Gerneric Access Profile) callback for BLE events
     ret = esp_ble_gap_register_callback(ble_gap_cb);
     if(ret != ESP_OK){
         ESP_LOGE(TAG, "BLE GAP callback register failed: %s", esp_err_to_name(ret));
@@ -684,6 +716,16 @@ esp_err_t ble_discovery_init(void)
 
     ESP_LOGI(TAG, "BLE device discovery initialized successfully");
     return ESP_OK;
+}
+
+void ble_get_discovery_stats(uint32_t *devices_found, uint32_t *scan_sessions){
+    if(devices_found){
+        *devices_found = discovery_stats.total_devices_found;
+    }
+
+    if(scan_sessions){
+        *scan_sessions = discovery_stats.total_scan_sessions;
+    }
 }
 
 #endif // CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM

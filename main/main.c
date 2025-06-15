@@ -113,49 +113,125 @@ static void jbl_analysis_complete_cb(ble_device_analysis_result_t *result)
     }
 }
 
+
 /**
- * @brief Process discovered BLE devices looking for JBL FLIP 5
+ * @brief Event handler for BLE discovery events
  * 
- * This function would be called from your main BLE discovery loop
- * when new devices are found.
+ * Handles all BLE discovery related events. This is where we process
+ * discovered devices and look for JBL FLIP 5 speakers.
+ * 
+ * @param event_handler_arg User data passed to the event handler
+ * @param event_base Event base (BLE_DISCOVERY_EVENTS in our case)
+ * @param event_id Specific event ID (DEVICE_FOUND, STARTED, etc.)
+ * @param event_data Event-specific data
  */
-void process_discovered_device_for_jbl(const discovered_ble_device_t *device)
+static void ble_discovery_event_handler(void* event_handler_arg, 
+                                       esp_event_base_t event_base,
+                                       int32_t event_id, 
+                                       void* event_data)
 {
-    // Skip if we already found our target device
-    if (jbl_device_found) {
+    // Verify this is our event base
+    if (event_base != BLE_DISCOVERY_EVENTS) {
         return;
     }
-    
-    // Check signal strength - need reasonable signal for audio streaming
-    if (device->rssi < -80) {
-        ESP_LOGD(TAG, "Device signal too weak (RSSI: %d dBm), skipping", device->rssi);
-        return;
-    }
-    
-    // Check if this looks like a JBL device
-    if (is_jbl_flip5_device(device)) {
-        ESP_LOGI(TAG, "🎵 Potential JBL FLIP 5 found!");
-        ESP_LOGI(TAG, "Address: %02x:%02x:%02x:%02x:%02x:%02x",
-                 device->bda[0], device->bda[1], device->bda[2],
-                 device->bda[3], device->bda[4], device->bda[5]);
-        ESP_LOGI(TAG, "Name: %s", device->has_name ? device->name : "Unknown");
-        ESP_LOGI(TAG, "RSSI: %d dBm", device->rssi);
-        
-        // Save device info
-        memcpy(&target_jbl_device, device, sizeof(discovered_ble_device_t));
-        jbl_device_found = true;
-        
-        // Stop discovery to save power and reduce interference
-        ESP_LOGI(TAG, "Stopping BLE discovery to analyze JBL device...");
-        ble_stop_device_discovery();
-        
-        // Start detailed analysis of the JBL device
-        ESP_LOGI(TAG, "Starting detailed analysis of JBL device...");
-        esp_err_t ret = ble_analyze_device(device->bda, device->addr_type, jbl_analysis_complete_cb);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to start JBL device analysis: %s", esp_err_to_name(ret));
-            jbl_device_found = false; // Reset so we can try again
+
+    switch (event_id) {
+        case BLE_DISCOVERY_STARTED:
+        {
+            ble_discovery_started_event_data_t *started_data = (ble_discovery_started_event_data_t*)event_data;
+            ESP_LOGI(TAG, "BLE Discovery Started - Session %lu, Duration: %lu seconds", 
+                     started_data->session_id, started_data->scan_duration_sec);
+            break;
         }
+
+        case BLE_DISCOVERY_DEVICE_FOUND:
+        {
+            ble_device_found_event_data_t *device_data = (ble_device_found_event_data_t*)event_data;
+            
+            ESP_LOGI(TAG, "📱 BLE Device Found (#%lu in session %lu)%s", 
+                     device_data->discovery_count,
+                     device_data->session_id,
+                     device_data->is_duplicate ? " [DUPLICATE]" : "");
+
+            // Skip if we already found our target device
+            if (jbl_device_found) {
+                ESP_LOGD(TAG, "Already found JBL device, skipping further discovery");
+                return;
+            }
+
+            // Skip duplicates for analysis
+            if (device_data->is_duplicate) {
+                ESP_LOGD(TAG, "Skipping duplicate device");
+                return;
+            }
+
+            const discovered_ble_device_t *device = &device_data->device;
+
+            // Check signal strength - need reasonable signal for audio streaming
+            if (device->rssi < -80) {
+                ESP_LOGD(TAG, "Device signal too weak (RSSI: %d dBm), skipping", device->rssi);
+                return;
+            }
+
+            // Check if this looks like a JBL device
+            if (is_jbl_flip5_device(device)) {
+                ESP_LOGI(TAG, "Potential JBL FLIP 5 found!");
+                ESP_LOGI(TAG, "Address: %02x:%02x:%02x:%02x:%02x:%02x",
+                         device->bda[0], device->bda[1], device->bda[2],
+                         device->bda[3], device->bda[4], device->bda[5]);
+                ESP_LOGI(TAG, "Name: %s", device->has_name ? device->name : "Unknown");
+                ESP_LOGI(TAG, "RSSI: %d dBm", device->rssi);
+
+                // Save device info
+                memcpy(&target_jbl_device, device, sizeof(discovered_ble_device_t));
+                jbl_device_found = true;
+
+                // Stop discovery to save power and reduce interference
+                ESP_LOGI(TAG, "Stopping BLE discovery to analyze JBL device...");
+                ble_stop_device_discovery();
+
+                // Start detailed analysis of the JBL device
+                ESP_LOGI(TAG, "Starting detailed analysis of JBL device...");
+                esp_err_t ret = ble_analyze_device(device->bda, device->addr_type, jbl_analysis_complete_cb);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to start JBL device analysis: %s", esp_err_to_name(ret));
+                    jbl_device_found = false; // Reset so we can try again
+                }
+            } else {
+                ESP_LOGD(TAG, "Device doesn't match JBL criteria");
+            }
+            break;
+        }
+
+        case BLE_DISCOVERY_STOPPED:
+        {
+            ble_discovery_stopped_event_data_t *stopped_data = (ble_discovery_stopped_event_data_t*)event_data;
+            ESP_LOGI(TAG, "BLE Discovery Stopped - Session %lu", stopped_data->session_id);
+            ESP_LOGI(TAG, "   Found %lu devices in %lu ms", 
+                     stopped_data->total_devices_found, stopped_data->scan_duration_ms);
+            
+            if (stopped_data->stop_reason == ESP_ERR_TIMEOUT) {
+                ESP_LOGI(TAG, "   Reason: Scan timeout");
+            } else if (stopped_data->stop_reason == ESP_OK) {
+                ESP_LOGI(TAG, "   Reason: Manually stopped");
+            } else {
+                ESP_LOGW(TAG, "   Reason: Error - %s", esp_err_to_name(stopped_data->stop_reason));
+            }
+            break;
+        }
+
+        case BLE_DISCOVERY_ERROR:
+        {
+            ble_discovery_error_event_data_t *error_data = (ble_discovery_error_event_data_t*)event_data;
+            ESP_LOGE(TAG, "BLE Discovery Error: %s (%s)", 
+                     error_data->error_description, 
+                     esp_err_to_name(error_data->error_code));
+            break;
+        }
+
+        default:
+            ESP_LOGW(TAG, "Unknown BLE discovery event: %ld", event_id);
+            break;
     }
 }
 
@@ -185,62 +261,39 @@ esp_err_t init_jbl_flip5_discovery(void)
 }
 
 /**
- * @brief Enhanced device filtering for BLE discovery
+ * @brief Initialize event handling for BLE discovery
  * 
- * This shows how you could modify your existing BLE discovery
- * to be more targeted for audio devices.
+ * Sets up the ESP event system and registers handlers for BLE discovery events.
  */
-static bool should_analyze_device(const discovered_ble_device_t *device)
+static esp_err_t init_event_handling(void)
 {
-    // Always analyze if it looks like JBL
-    if (is_jbl_flip5_device(device)) {
-        return true;
+    esp_err_t ret;
+
+    // Create the default event loop if it doesn't exist
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        // ESP_ERR_INVALID_STATE means the default loop already exists, which is fine
+        ESP_LOGE(TAG, "Failed to create default event loop: %s", esp_err_to_name(ret));
+        return ret;
     }
+
+    // Register our BLE discovery event handler
+    // According to ESP-IDF docs: "esp_event_handler_register() registers an event handler
+    // to the default event loop for a specific event"
+    ret = esp_event_handler_register(BLE_DISCOVERY_EVENTS,           // Event base
+                                   ESP_EVENT_ANY_ID,                // Any event ID from this base
+                                   ble_discovery_event_handler,      // Handler function
+                                   NULL);                            // User data (none needed)
     
-    // Check for devices advertising audio services
-    if (device->has_services) {
-        for (int i = 0; i < device->service_count; i++) {
-            if (is_ble_audio_service(device->service_uuids[i])) {
-                ESP_LOGI(TAG, "Found device with BLE Audio service: 0x%04X", 
-                         device->service_uuids[i]);
-                return true;
-            }
-        }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register BLE discovery event handler: %s", esp_err_to_name(ret));
+        return ret;
     }
-    
-    // Check manufacturer data for known audio companies
-    if (device->manufacturer_data_len >= 2) {
-        uint16_t company_id = (device->manufacturer_data[1] << 8) | device->manufacturer_data[0];
-        
-        switch (company_id) {
-            case BT_COMPANY_ID_HARMAN:    // JBL, AKG
-            case BT_COMPANY_ID_SONY:      // Sony audio products
-            case BT_COMPANY_ID_BOSE:      // Bose speakers
-            case BT_COMPANY_ID_BEATS:     // Beats headphones
-                ESP_LOGI(TAG, "Found audio company device: %s", 
-                         get_company_name(company_id));
-                return true;
-        }
-    }
-    
-    return false;
+
+    ESP_LOGI(TAG, "Event handling initialized successfully");
+    return ESP_OK;
 }
 
-/**
- * @brief Integration point with existing BLE discovery
- * 
- * Add this call to your existing ble_device_processing_task()
- * in bluetooth_ble.c after logging device info.
- */
-void integrate_with_existing_discovery(const discovered_ble_device_t *device)
-{
-    // Your existing device logging code here...
-    
-    // Add JBL-specific processing
-    if (should_analyze_device(device)) {
-        process_discovered_device_for_jbl(device);
-    }
-}
 
 
 static void ble_config(void)
@@ -286,6 +339,13 @@ void app_main(void)
 
     esp_err_t ret;
 
+    // Initialize event handling first - this must come before any event posting
+    ret = init_event_handling();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Event handling initialization failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    
     // If bluetooth class is initialize it
     #if CONFIG_BTDM_CONTROLLER_MODE_BR_EDR_ONLY
         // Release unused memory back to the heap if using bluetooth classic only
@@ -303,7 +363,6 @@ void app_main(void)
 
     // Only BLE active
     #elif CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY
-        
         ble_config();
 
     // Neither versions of bluetooth are active. Clear the memory

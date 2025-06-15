@@ -101,6 +101,7 @@ typedef struct {
     esp_err_t ble_start_device_discovery(uint32_t scan_duration);
     esp_err_t ble_stop_device_discovery(void);
     void ble_get_discovery_stats(uint32_t *devices_found, uint32_t *scan_sessions);
+    void ble_get_discovery_stats(uint32_t *devices_found, uint32_t *scan_sessions);
     bool ble_is_discovery_active(void);
 #endif // CONFIG_BTDM_CONTROLLER_MODE_BLE_ONLY || CONFIG_BTDM_CONTROLLER_MODE_BTDM
 
