@@ -216,9 +216,6 @@ static void complete_analysis(ble_analysis_state_t *state)
 
 /**
  * @brief GATT client callback for BLE operations
- *
- * According to ESP-IDF docs: "GATT client event callback, it's used to receive
- * GATT client events like connection status, service discovery results, etc."
  */
 static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, 
                                esp_ble_gattc_cb_param_t *param)
@@ -276,13 +273,52 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
     // A new service/characteristic has been found
     case ESP_GATTC_SEARCH_RES_EVT: {
         uint16_t uuid = 0;
-        
+        bool is_standard_service = false;
+
         // Extract UUID based on length
         if (param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
             uuid = param->search_res.srvc_id.uuid.uuid.uuid16;
+            is_standard_service = true;
         } else if (param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_32) {
             // For 32-bit UUIDs, we only store if they fit in 16 bits
             uuid = param->search_res.srvc_id.uuid.uuid.uuid32 & 0xFFFF;
+            is_standard_service = true;
+
+        }else if(param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128){
+            // 128-bit UUIDs are often proprietary services
+            uint8_t *uuid128 = param->search_res.srvc_id.uuid.uuid.uuid128;
+        
+             // Log the full 128-bit UUID for debugging
+            ESP_LOGI(TAG, "Service found: 128-bit UUID: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                 uuid128[15], uuid128[14], uuid128[13], uuid128[12],
+                 uuid128[11], uuid128[10], uuid128[9], uuid128[8],
+                 uuid128[7], uuid128[6], uuid128[5], uuid128[4],
+                 uuid128[3], uuid128[2], uuid128[1], uuid128[0]);
+
+            // Check if it's a Bluetooth SIG standard service with 128-bit representation
+            // Standard services have the form: 0000XXXX-0000-1000-8000-00805F9B34FB
+            if (uuid128[15] == 0x00 && uuid128[14] == 0x00 && 
+                uuid128[11] == 0x00 && uuid128[10] == 0x00 &&
+                uuid128[9] == 0x10 && uuid128[8] == 0x00 &&
+                uuid128[7] == 0x80 && uuid128[6] == 0x00 &&
+                uuid128[5] == 0x00 && uuid128[4] == 0x80 &&
+                uuid128[3] == 0x5F && uuid128[2] == 0x9B &&
+                uuid128[1] == 0x34 && uuid128[0] == 0xFB) {
+
+                // Extract the 16-bit service UUID from bytes 12-13
+                uuid = (uuid128[13] << 8) | uuid128[12];
+                is_standard_service = true;
+                ESP_LOGI(TAG, "128-bit UUID is standard service: 0x%04X", uuid);
+            }else{
+                // uuid is for propritary service
+                ESP_LOGI(TAG, "Found proprietary 128-bit service UUID");
+
+                // For JBL devices, we should investigate if this is their audio service
+                // For now, we'll skip storing it in our 16-bit array
+                is_standard_service = false;
+            }
+        }else{
+            ESP_LOGW(TAG, "Unknown UUID length: %d", param->search_res.srvc_id.uuid.len);       
         }
         
         ESP_LOGI(TAG, "Service found: UUID length %d, UUID16: 0x%04X", 
