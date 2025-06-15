@@ -292,7 +292,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         xSemaphoreTake(analyzer_state.mutex, portMAX_DELAY);
         state = find_analysis_by_conn_id(param->search_res.conn_id);
         
-        if (state && state->result.service_count < 32) {
+        if (state->result.service_count < 32) {
             state->result.services[state->result.service_count++] = uuid;
             
             // Log if it's an audio service
@@ -314,13 +314,12 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         state = find_analysis_by_conn_id(param->search_cmpl.conn_id);
         
         // Possible that this fails and the state never closes?
-        if (state) {
-            state->discovery_in_progress = false;
-            state->result.services_discovered = true;
-            
-            // Analysis is complete
-            complete_analysis(state);
-        }
+        state->discovery_in_progress = false;
+        state->result.services_discovered = true;
+        
+        // Analysis is complete
+        complete_analysis(state);
+        
         
         xSemaphoreGive(analyzer_state.mutex);
         break;
@@ -332,16 +331,14 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         xSemaphoreTake(analyzer_state.mutex, portMAX_DELAY);
         state = find_analysis_by_address(param->disconnect.remote_bda);
         
-        if (state) {
-            state->connected = false;
-            
-            // If discovery wasn't completed, complete analysis now
-            if (!state->result.analysis_complete) {
-                ESP_LOGW(TAG, "Disconnected before analysis complete");
-                complete_analysis(state);
-            }
-        }
+        state->connected = false;
         
+        // If discovery wasn't completed, complete analysis now
+        if (!state->result.analysis_complete) {
+            ESP_LOGW(TAG, "Disconnected before analysis complete");
+            complete_analysis(state);
+        }
+    
         xSemaphoreGive(analyzer_state.mutex);
         break;
         
