@@ -13,6 +13,7 @@
 typedef struct {
     esp_bd_addr_t bda;                                                  // Bluetooth device address
     esp_ble_addr_type_t addr_type;                                      // Address type (public/random)
+    esp_bt_dev_type_t supported_modes;                                  // Bluetooth device type
     int8_t rssi;                                                        // Signal strength
 
     // Parsed advertisement data        
@@ -36,7 +37,7 @@ typedef struct {
 /**
  * @brief BLE Discovery Event IDs
  * 
- * These are the specific events that our BLE discovery system can post.
+ * These are the specific events that the BLE discovery system can post.
  */
 typedef enum {
     BLE_DISCOVERY_STARTED,              // Discovery scanning started
@@ -44,6 +45,7 @@ typedef enum {
     BLE_DISCOVERY_DEVICE_FOUND,         // New BLE device discovered
     BLE_DISCOVERY_SCAN_TIMEOUT,         // Scan duration timeout reached
     BLE_DISCOVERY_ERROR,                // Error occurred during discovery
+    BLE_SCAN_RESPONSE,                  // Reponse to a scan
 } ble_discovery_event_id_t;
 
 /**
@@ -62,7 +64,6 @@ typedef struct {
  * @brief BLE Discovery Event Base
  * 
  * This creates a unique identifier for our BLE discovery events.
- * According to ESP-IDF documentation.
  */
 ESP_EVENT_DECLARE_BASE(BLE_DISCOVERY_EVENTS);
 

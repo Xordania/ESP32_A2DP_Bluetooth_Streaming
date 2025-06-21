@@ -11,6 +11,8 @@
 #include "freertos/queue.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "esp_event.h" 
+
 
 static const char *TAG = "BLE_DISCOVERY";
 
@@ -195,7 +197,7 @@ static void post_discovery_error_event(esp_err_t error_code, const char* descrip
 }
 
 // ============================================================================
-// BLE Fucntionality
+// BLE Functionality
 // ============================================================================
 
 
@@ -367,10 +369,10 @@ static void parse_advertisement_data(uint8_t *adv_data, uint16_t adv_data_len, d
             case ESP_BLE_AD_TYPE_16SRV_CMPL:
                 // Handle incomplete and complete 16-bit service class UUIDs the same
             case ESP_BLE_AD_TYPE_16SRV_PART:
-                    device_info->has_services = true;
-                    device_info->service_count = data_len / 2; // 2 bytes per UUID
+                device_info->has_services = true;
+                device_info->service_count = data_len / 2; // 2 bytes per UUID
                     
-                    // Limit service count to maximum
+                // Limit service count to maximum
                 if (device_info->service_count > CONFIG_BLE_MAX_SERVICES_PER_DEVICE) {
                     device_info->service_count = CONFIG_BLE_MAX_SERVICES_PER_DEVICE;
                 }
@@ -402,6 +404,13 @@ static void parse_advertisement_data(uint8_t *adv_data, uint16_t adv_data_len, d
                     device_info->tx_power = (int8_t)data[0];
                     ESP_LOGD(TAG, "TX Power: %d dBm", device_info->tx_power);
                 }
+                break;
+            
+            case ESP_BLE_AD_TYPE_FLAG:
+                // Check what modes the device support
+                device_info->supported_modes = (uint8_t)data & 0x04;
+                ESP_LOGI(TAG, "Device BR/EDR support:0x%0x", 
+                     device_info->supported_modes);
                 break;
 
             default:
@@ -462,7 +471,7 @@ static void ble_device_processing_task(void *pvParameters)
 static void handle_ble_scan_result(esp_ble_gap_cb_param_t *param){
     switch(param->scan_rst.search_evt){
 
-        // This is the event that fire every time an advertising device is found
+        // This is the event that fires every time an advertising device is found
         case ESP_GAP_SEARCH_INQ_RES_EVT:
         // New device discovered
         {
@@ -480,7 +489,6 @@ static void handle_ble_scan_result(esp_ble_gap_cb_param_t *param){
             }
 
             // Parse scan response data if present (active scanning)
-            // According to ESP-IDF docs: scan response data follows advertising data in ble_adv array
             if (param->scan_rst.scan_rsp_len > 0) {
                 ESP_LOGD(TAG, "Scan response data available (%d bytes)", param->scan_rst.scan_rsp_len);
                 uint8_t *scan_rsp_data = param->scan_rst.ble_adv + param->scan_rst.adv_data_len;

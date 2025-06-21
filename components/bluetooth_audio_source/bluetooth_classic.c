@@ -53,16 +53,83 @@
 #include "esp_avrc_api.h"
 #include "esp_gap_bt_api.h"
 #include "esp_bt_defs.h"
+#include "esp_event.h" 
 
 static const char *TAG = "A2DP_SOURCE";
 
-// Queue for discoverd devices
 static QueueHandle_t discovered_device_queue = NULL;
 
 // Cache for discovered devices to prevent duplicate processing and for retrival later on when selecting devices
 static discovered_device_t discovered_devices_cache[CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE];
 static int discovered_devices_count = 0;
 static int discovered_devices_fifo_pointer = 0;
+
+
+static struct {
+    bool events_enabled;                // Are events initialized?
+    uint32_t current_session_id;        // Current discovery session ID
+    uint32_t devices_in_session;        // Devices found in current session
+    uint32_t total_devices_found;       // Total devices found across all sessions
+    uint32_t total_scan_sessions;       // Total number of scan sessions
+    TickType_t session_start_time;      // When current session started
+    uint32_t configured_scan_duration;  // Configured scan duration for current session
+} discovery_stats = {
+    .events_enabled = false,
+    .current_session_id = 0,
+    .devices_in_session = 0,
+    .total_devices_found = 0,
+    .total_scan_sessions = 0
+};
+
+/**
+ * @brief Define the event base for BT discovery
+ */
+ESP_EVENT_DEFINE_BASE(BT_DISCOVERY_EVENTS);
+
+// ============================================================================
+// EVENT POSTING FUNCTIONS
+// ============================================================================
+/**
+ * @brief Post device discovered event
+ * 
+ * Posts BT_DISCOVERY_DEVICE_FOUND event with complete device information.
+ */
+static void post_device_discovered_event(discovered_device_t *device)
+{
+    if (!discovery_stats.events_enabled) {
+        ESP_LOGD(TAG, "Events not enabled, skipping device discovered event");
+        return;
+    }
+
+    bool is_duplicate = is_bt_device_already_discovered(device->bda);
+    
+    // Increment counters
+    if (!is_duplicate) {
+        discovery_stats.devices_in_session++;
+        discovery_stats.total_devices_found++;
+    }
+
+    // Create event data
+    bt_device_found_event_data_t event_data = {
+        .device = *device,
+        .is_duplicate = is_duplicate,
+        .discovery_count = discovery_stats.devices_in_session,
+        .session_id = discovery_stats.current_session_id
+    };
+
+    // Post event
+    esp_err_t ret = esp_event_post(BT_DISCOVERY_EVENTS,
+                                  BT_DISCOVERY_DEVICE_FOUND,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);  // 100ms timeout
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post device discovered event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGD(TAG, "Posted device discovered event for session %lu", discovery_stats.current_session_id);
+    }
+}
 
 /**
  * @brief Check if device has already been discovered and processed
@@ -74,7 +141,7 @@ static int discovered_devices_fifo_pointer = 0;
  * @param bda Bluetooth device address to check
  * @return true if device already discovered, false if new device
  */
-static bool is_device_already_discovered(esp_bd_addr_t bda)
+bool is_bt_device_already_discovered(esp_bd_addr_t bda)
 {
     for (int i = 0; i < discovered_devices_count; i++)
     {
@@ -94,7 +161,7 @@ static bool is_device_already_discovered(esp_bd_addr_t bda)
  * of the fifo keeping track of where we are.
  * @param device Complete discovered device information to add to cache
  */
-static void add_device_to_cache(discovered_device_t *device)
+void add_device_to_bt_cache(discovered_device_t *device)
 {
 
     if (discovered_devices_count < CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE)
@@ -108,7 +175,7 @@ static void add_device_to_cache(discovered_device_t *device)
         // Cache is full, overwrite oldest entry using FIFO pointer
         memcpy(&discovered_devices_cache[discovered_devices_fifo_pointer], device, sizeof(discovered_device_t));
         
-        ESP_LOGD(TAG, "Cache full, overwrote device at index %d, next overwrite at %d", 
+        ESP_LOGD(TAG, "Cache full, overwrote device at index %d", 
                 discovered_devices_fifo_pointer);
 
         // Advance FIFO pointer with wrap-around
@@ -133,27 +200,6 @@ static discovered_device_t* get_discovered_devices(int *count)
 }
 
 /**
- * @brief Debug function to log current cache state
- *
- * Logs the current state of the device cache including FIFO pointer position.
- * Useful for debugging cache behavior and FIFO operation.
- */
-static void log_cache_state(void)
-{
-    ESP_LOGD(TAG, "Cache state: %d/%d devices, FIFO pointer at %d", 
-             discovered_devices_count, CONFIG_A2DP_MAX_DISCOVERED_DEVICES_CACHE, discovered_devices_fifo_pointer);
-    
-    // Print values in the c
-    for (int i = 0; i < discovered_devices_count; i++)
-    {
-        ESP_LOGD(TAG, "  [%d] %02x:%02x:%02x:%02x:%02x:%02x", i,
-                 discovered_devices_cache[i].bda[0], discovered_devices_cache[i].bda[1], 
-                 discovered_devices_cache[i].bda[2], discovered_devices_cache[i].bda[3],
-                 discovered_devices_cache[i].bda[4], discovered_devices_cache[i].bda[5]);
-    }
-}
-
-/**
  * @brief Get human-readable device class description
  *
  * Converts Bluetooth major device class code to descriptive string.
@@ -162,7 +208,7 @@ static void log_cache_state(void)
  * @param major_class Major device class code from Class of Device
  * @return const char* Human-readable description
  */
-static const char* get_device_class_name(uint32_t major_class)
+const char* get_bt_device_class_name(uint32_t major_class)
 {
     switch (major_class)
     {
@@ -184,292 +230,6 @@ static const char* get_device_class_name(uint32_t major_class)
         case 0x0f: return "Reserved";
         case 0x1F: return "Uncategorized";
         default: return "Unknown";
-    }
-}
-
-/**
- * @brief Parse audio codec configuration from A2DP negotiation
- *
- * Extracts and interprets codec information from the A2DP audio configuration
- * event. Supports SBC, MPEG Audio, AAC, and ATRAC codecs. For SBC codec,
- * performs detailed parsing of sample rate and channel configuration.
- *
- * @param param Pointer to A2DP callback parameter containing codec configuration
- * @return audio_config_t Parsed audio configuration with codec type, sample rate,
- *                        channels, codec name, and validity flag
- *
- * @note For non-SBC codecs, sample rate defaults to 44.1kHz as this is most common
- * @note If codec type is unknown, is_valid will be set to false
- */
-static audio_config_t parse_audio_codec_cfg(esp_a2d_cb_param_t *param)
-{
-    audio_config_t config = {0};
-    esp_a2d_mcc_t *mcc = &param->audio_cfg.mcc;
-
-    config.codec_type = mcc->type;
-    config.channels = 2; // Default to stereo
-    config.is_valid = true;
-
-    // Checks what kind of codec the sink is requesting
-    // SBC is the default kind for speakers, though this should handle it if another
-    // codec is asked for
-    switch (mcc->type)
-    {
-    case ESP_A2D_MCT_SBC:
-    {
-        uint8_t *sbc = mcc->cie.sbc;
-        config.codec_name = "SBC";
-
-        // Parse sample frequency from SBC capability info element (CIE)
-        // SBC CIE byte 0 format: [sampling_freq][channel_mode][block_length][subbands][allocation_method]
-        //                        bits 4-7       bits 0-3     ...
-        if (sbc[0] & 0x20)
-            config.sample_rate = 48000;
-        else if (sbc[0] & 0x10)
-            config.sample_rate = 44100;
-        else if (sbc[0] & 0x08)
-            config.sample_rate = 32000;
-        else if (sbc[0] & 0x04)
-            config.sample_rate = 16000;
-        else
-            config.sample_rate = 44100; // Default fallback
-
-        // Parse channel mode from bits 0-3 of byte 0
-        // 0x08 = Mono, others = Stereo variants (Joint Stereo, Stereo, Dual Channel)
-        if (sbc[0] & 0x08)
-            config.channels = 1; // Mono
-        else
-            config.channels = 2; // Stereo modes
-        break;
-    }
-
-    case ESP_A2D_MCT_M12:
-        config.codec_name = "MPEG Audio";
-        config.sample_rate = 44100; // Common default for MP3
-        break;
-
-    case ESP_A2D_MCT_M24:
-        config.codec_name = "AAC";
-        config.sample_rate = 44100; // Common default for AAC
-        break;
-
-    case ESP_A2D_MCT_ATRAC:
-        config.codec_name = "ATRAC";
-        config.sample_rate = 44100;
-        break;
-
-    default:
-        config.codec_name = "Unknown";
-        config.sample_rate = 44100;
-        config.is_valid = false;
-        break;
-    }
-
-    return config;
-}
-
-/**
- * @brief Background task to process discovered Bluetooth devices
- *
- * A FreeRTOs task that processes discovered Bluetooth devices from the
- * discovery queue. It performs detailed analysis of device properties
- * including device name, Class of Device, and RSSI. When an audio/video device
- * is found (CoD major class 0x04), it attempts an A2DP connection and stops
- * device discovery.
- *
- * The task is designed to handle heavy processing outside of Bluetooth stack
- * callbacks to maintain stack responsiveness during device discovery.
- *
- * @param pvParameters FreeRTOS task parameter (unused in this implementation)
- *
- * @note This task runs indefinitely until an audio device is found and connected
- * @note Task will block on queue receive when no devices are pending processing
- * @note Device discovery is cancelled when first audio device connection is attempted
- */
-static void device_processing_task(void *pvParameters)
-{
-    discovered_device_t device;
-
-    while (1)
-    {
-       if (xQueueReceive(discovered_device_queue, &device, portMAX_DELAY))
-        {
-            // Check if we've already processed this device
-            if (is_device_already_discovered(device.bda))
-            {
-                ESP_LOGD(TAG, "Device %02x:%02x:%02x:%02x:%02x:%02x already processed, skipping",
-                         device.bda[0], device.bda[1], device.bda[2],
-                         device.bda[3], device.bda[4], device.bda[5]);
-                continue;
-            }
-
-            ESP_LOGI(TAG, "Processing new device: %02x:%02x:%02x:%02x:%02x:%02x",
-                     device.bda[0], device.bda[1], device.bda[2],
-                     device.bda[3], device.bda[4], device.bda[5]);
-
-            char device_name[64] = "Unknown";
-
-            // Process device properties
-            for (int i = 0; i < device.num_prop; i++)
-            {
-                esp_bt_gap_dev_prop_t *prop = &device.props[i];
-
-                switch (prop->type)
-                {
-                case ESP_BT_GAP_DEV_PROP_BDNAME:
-                    strncpy(device_name, (char *)prop->val, sizeof(device_name) - 1);
-                    device_name[sizeof(device_name) - 1] = '\0';
-                    ESP_LOGI(TAG, "Device name: %s", device_name);                    break;
-
-                case ESP_BT_GAP_DEV_PROP_COD:
-                {
-                    uint32_t cod = *(uint32_t *)prop->val;
-
-                    // Extract classes from received information
-                    // CoD format: [Service Classes][Major Device Class][Minor Device Class][Format]
-                    //             bits 13-23        bits 8-12          bits 2-7         bits 0-1
-                    uint32_t major_class = (cod & 0x1F00) >> 8;
-                    uint32_t minor_class = (cod & 0x00FC) >> 2;      
-                    uint32_t service_class = (cod & 0xFFE000) >> 13; 
-                    
-                    ESP_LOGI(TAG, "Class of Device: 0x%06lx", cod);
-                    ESP_LOGI(TAG, "  Major class: 0x%02lx (%s)", major_class, get_device_class_name(major_class));
-                    ESP_LOGI(TAG, "  Minor class: 0x%02lx", minor_class);    
-                    ESP_LOGI(TAG, "  Service class: 0x%03lx", service_class);
-
-                    // Extract major device class from bits 8-12 of Class of Device
-                    // CoD format: [Service Classes][Major Device Class][Minor Device Class][Format]
-                    //             bits 13-23        bits 8-12          bits 2-7         bits 0-1
-                    if (major_class == 0x04)
-                    {
-                        ESP_LOGI(TAG, "Found audio/video device!");
-                    }
-                    break;
-                }
-
-                case ESP_BT_GAP_DEV_PROP_RSSI:
-                    ESP_LOGI(TAG, "RSSI: %d dBm", *(int8_t *)prop->val);
-                    break;
-
-                default:
-                    ESP_LOGI(TAG, "Property type %d, length %d", prop->type, prop->len);
-                    break;
-                }
-            }
-
-            // Add to cache for future reference (all devices, not just audio)
-            add_device_to_cache(&device);
-            
-            // Debug only
-            log_cache_state();
-
-        }
-    }
-}
-
-/**
- * @brief A2DP event callback handler
- *
- * Handles all A2DP (Advanced Audio Distribution Profile) events during audio
- * streaming operations. Processes connection state changes, audio streaming
- * state changes, codec configuration events, and media control acknowledgments.
- *
- * Key events handled:
- * - Connection establishment/termination
- * - Audio streaming start/stop
- * - Codec negotiation and configuration
- * - Media control command acknowledgments
- *
- * @param event Type of A2DP event that occurred
- * @param param Event-specific parameter data containing relevant information
- *
- * @note This callback executes in Bluetooth stack context - keep processing minimal
- * @note Connection and audio state changes are logged for debugging
- * @note Codec configuration is parsed and logged with detailed information
- */
-static void bt_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
-{
-    switch (event)
-    {
-    case ESP_A2D_CONNECTION_STATE_EVT:
-        // State of on the connection with a sink
-        if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED)
-        {
-            ESP_LOGI(TAG, "A2DP connected to: ");
-
-            for (int i = 0; i < ESP_BD_ADDR_LEN; i++)
-            {
-                printf("%c", param->conn_stat.remote_bda[i]);
-            }
-
-            // Audio stream
-        }
-        else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTING)
-        {
-            ESP_LOGI(TAG, "A2DP connecting");
-        }
-        else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING)
-        {
-            ESP_LOGI(TAG, "A2DP disconnecting");
-        }
-        else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED)
-        {
-            ESP_LOGI(TAG, "A2DP disconnected");
-
-            // Stop audio stream
-        }
-        break;
-    case ESP_A2D_AUDIO_STATE_EVT:
-        // Change in audio streaming state (i.e. Puase)
-        if (param->audio_stat.state == ESP_A2D_AUDIO_STATE_STARTED)
-        {
-            ESP_LOGI(TAG, "Audio streaming started");
-        }
-        else if (param->audio_stat.state == ESP_A2D_AUDIO_STATE_STOPPED)
-        {
-            ESP_LOGI(TAG, "Audio stream stopped");
-        }
-        else if (param->audio_stat.state == ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND)
-        {
-            ESP_LOGI(TAG, "Audio streaming remote suspended");
-        }
-
-        break;
-
-    case ESP_A2D_AUDIO_CFG_EVT:
-        // Configuration of the bluetooth link i.e. sample rate, channel number, etc. etc.
-        audio_config_t config = parse_audio_codec_cfg(param);
-        if (config.is_valid)
-        {
-            ESP_LOGI(TAG, "Audio codec configured:");
-            ESP_LOGI(TAG, "  Codec: %s", config.codec_name);
-            ESP_LOGI(TAG, "  Sample rate: %lu Hz", config.sample_rate);
-            ESP_LOGI(TAG, "  Channels: %d", config.channels);
-
-            // TODO: Store config globally for audio pipeline use
-            // global_audio_config = config;
-        }
-        else
-        {
-            ESP_LOGW(TAG, "Unsupported codec negotiated: %s", config.codec_name);
-        }
-        break;
-
-    case ESP_A2D_MEDIA_CTRL_ACK_EVT:
-        // Response to media control commands like play and pasue
-        ESP_LOGI(TAG, "Media control acknowledged");
-        break;
-
-    case ESP_A2D_PROF_STATE_EVT:
-        if(param->a2d_prof_stat.init_state == ESP_A2D_INIT_SUCCESS){
-            ESP_LOGI(TAG, "A2DP initialization successful");
-        }else{
-            ESP_LOGI(TAG, "A2DP deinitialization successful");
-        }
-        break;
-    default:
-        ESP_LOGE(TAG, "Unhandled A2DP event %d", event);
-        break;
     }
 }
 
@@ -539,6 +299,9 @@ static void bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
             device.props[i] = param->disc_res.prop[i];
         }
 
+        // Send discovery event
+        post_device_discovered_event(&device);
+
         // Queue for processing in separate task
         // Doing this outside of the interrupt will free up the bluetooth stack so if another event triggers
         // the callback will have finsihed quickly enough to handle it
@@ -570,22 +333,6 @@ static void bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 }
 
 /**
- * @brief Log current A2DP configuration settings
- *
- * Displays the current configuration values that were set via Kconfig.
- * Useful for debugging and verifying configuration during initialization.
- */
-static void log_config(){
-    // Log configuration values
-    ESP_LOGI(TAG, "A2DP Source Configuration:");
-    ESP_LOGI(TAG, "Device queue size: %d", CONFIG_A2DP_DISCOVERED_DEVICE_QUEUE_SIZE);
-    ESP_LOGI(TAG, "Task stack size: %d bytes", CONFIG_A2DP_DEVICE_PROCESSING_TASK_STACK_SIZE);
-    ESP_LOGI(TAG, "Task priority: %d", CONFIG_A2DP_DEVICE_PROCESSING_TASK_PRIORITY);
-    ESP_LOGI(TAG, "Max device properties: %d", CONFIG_A2DP_MAX_DEVICE_PROPERTIES);
-}
-
-
-/**
  * @brief Initialize GAP (Generic Access Profile) functionality
  *
  * Sets up the Bluetooth Generic Access Profile including callback registration,
@@ -605,9 +352,11 @@ static void log_config(){
  * @note Device discovery runs for 10 seconds by default
  * @note Device will be both connectable and discoverable to other devices
  */
-static esp_err_t bt_gap_init(void)
+esp_err_t bt_gap_init(QueueHandle_t *discovered_devices)
 {
     esp_err_t ret;
+
+    discovered_device_queue = *discovered_devices;
 
     // Register GAP callback for device discovery and authentication events
     ret = esp_bt_gap_register_callback(bt_gap_cb);
@@ -633,114 +382,12 @@ static esp_err_t bt_gap_init(void)
         return ret;
     }
 
-    // Start device discovery (general inquiry for 10 seconds, unlimited responses)
-    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Start discovery failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    discovery_stats.events_enabled = true;
+    ESP_LOGI(TAG, "Bluetooth discovery event initialized");
 
-    ESP_LOGI(TAG, "GAP initialized and device discovery started");
+    ESP_LOGI(TAG, "GAP initialized, run esp_bt_gap_start_discovery() to begin discovery");
     return ESP_OK;
 }
 
-/**
- * @brief Initialize Bluetooth A2DP source functionality
- *
- * Performs complete initialization of Bluetooth Classic stack and A2DP source
- * profile. This includes controller initialization, Bluedroid stack setup,
- * callback registration, and device discovery initiation.
- *
- * A2DP Initialization sequence:
- * 1. Create device discovery queue
- * 2. Configure task core affinity
- * 3. Create device processing background task
- * 4. Register A2DP event callback
- * 5. Initialize A2DP source profile
- * 6. Initialize GAP functionality (device discovery, naming, scan mode)
- *
- * Configuration values are read from Kconfig settings for queue size,
- * task parameters, and device limits.
- *
- * @note This function must be called after basic system initialization
- * @note Requires sufficient heap memory for Bluetooth stack (~150KB)
- * @note Will start device discovery automatically upon successful initialization
- * @note Function will return early if any initialization step fails
- */
-void bt_a2dp_source_init(void)
-{
-    esp_err_t ret;
-
-    log_config();
-
-    // Initialize NVS
-    ret = bt_nvs_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS initialization failed");
-        return;
-    }
-
-    // Initialize Bluetooth stack for Classic BT
-    ret = bt_controller_stack_init(ESP_BT_MODE_CLASSIC_BT);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Bluetooth stack initialization failed");
-        return;
-    }
-
-    // 1. Create device discovery queue
-    discovered_device_queue = xQueueCreate(CONFIG_A2DP_DISCOVERED_DEVICE_QUEUE_SIZE, 
-                                          sizeof(discovered_device_t));
-    if (discovered_device_queue == NULL) {
-        ESP_LOGE(TAG, "Failed to create discovered device queue");
-        return;
-    }
-
-    // 2. Configure task core affinity
-    // Handle Kconfig core selection: -1 means "any core"
-    BaseType_t core_id = CONFIG_A2DP_DEVICE_PROCESSING_CORE_ID;
-    if (core_id == -1) {
-        core_id = tskNO_AFFINITY;
-    }
-
-    // 3. Create device processing background task
-    BaseType_t task_result = xTaskCreatePinnedToCore(
-        device_processing_task,                              // Task function
-        "bt_device_proc",                                   // Task name
-        CONFIG_A2DP_DEVICE_PROCESSING_TASK_STACK_SIZE,     // Stack size
-        NULL,                                               // Parameters
-        CONFIG_A2DP_DEVICE_PROCESSING_TASK_PRIORITY,       // Priority
-        NULL,                                               // Task handle
-        core_id                                             // Core affinity
-    );
-
-    if (task_result != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create device processing task");
-        return;
-    }
-
-    // 4. Register A2DP event callback
-    ret = esp_a2d_register_callback(bt_a2d_cb);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "A2DP callback register failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // 5. Initialize A2DP source profile
-    ret = esp_a2d_source_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "A2DP source initialize failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // 6. Initialize GAP functionality (device discovery, naming, scan mode)
-    ret = bt_gap_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "GAP initialization failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    ESP_LOGI(TAG, "A2DP source initialized successfully");
-}
 
 #endif

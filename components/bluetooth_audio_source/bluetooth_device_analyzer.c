@@ -34,6 +34,11 @@ static const char *TAG = "BLE_ANALYZER";
 #define ANALYSIS_TIMEOUT_SEC 10
 
 /**
+ * @brief Define the event base for Analyzer discovery
+ */
+ESP_EVENT_DEFINE_BASE(BLE_ANALYZER_EVENTS);
+
+/**
  * @brief State for ongoing BLE device analysis
  */
 typedef struct {
@@ -64,6 +69,41 @@ static struct {
     esp_gatt_if_t gattc_if;                // Shared GATT client interface
     uint8_t app_id;                        // GATT client app ID
 } analyzer_state = {0};
+
+
+// ============================================================================
+// EVENT POSTING FUNCTIONS
+// ============================================================================
+/**
+ * @brief Post device discovered event
+ * 
+ * Posts BLE_DISCOVERY_DEVICE_FOUND event with complete device information.
+ */
+static void post_analysis_complete_event(ble_device_analysis_result_t *analyzer)
+{
+    
+    // Create event data
+    ble_analysis_complete_event_data_t event_data = {
+       .device = *analyzer,
+    };
+
+    // Post event
+    esp_err_t ret = esp_event_post(BLE_ANALYZER_EVENTS,
+                                  BLE_ANALYZER_COMPLETE,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);  // 100ms timeout
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post device discovered event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGD(TAG, "For device: %s", analyzer->name);
+    }
+}
+
+// ============================================================================
+// FUNCTIONS
+// ============================================================================
 
 /**
  * @brief Find analysis state by device address
@@ -216,13 +256,6 @@ static void complete_analysis(ble_analysis_state_t *state)
     ESP_LOGI(TAG, "BLE device analysis completed in %lu ms", 
              duration * portTICK_PERIOD_MS);
     
-    // Log results
-    ESP_LOGI(TAG, "Analysis Results:");
-    ESP_LOGI(TAG, "  Total services: %d", state->result.service_count);
-    ESP_LOGI(TAG, "  Audio services: %d", state->result.audio_service_count);
-    ESP_LOGI(TAG, "  Capabilities: %s", 
-             ble_audio_capabilities_to_string(state->result.audio_capabilities));
-    
     // Make a copy of the callback and result before requesting disconnect
     ble_device_analysis_cb_t callback = state->callback;
     ble_device_analysis_result_t result_copy = state->result;
@@ -243,6 +276,10 @@ static void complete_analysis(ble_analysis_state_t *state)
                 callback(&result_copy);
             }
         }
+
+        // Post the event
+        post_analysis_complete_event(&result_copy);
+
         // If disconnect succeeds, the disconnect event will handle cleanup and callback
     } else {
         // No connection to close, free state immediately and call callback
@@ -369,12 +406,6 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
         
         if (state->result.service_count < 32) {
             state->result.services[state->result.service_count++] = uuid;
-            
-            // Log if it's an audio service
-            if (is_ble_audio_service(uuid)) {
-                ESP_LOGI(TAG, "Found BLE Audio service: 0x%04X (%s)", 
-                         uuid, get_ble_audio_service_name(uuid));
-            }
         }
         
         xSemaphoreGive(analyzer_state.mutex);
@@ -480,8 +511,8 @@ esp_err_t ble_device_analyzer_init(void)
     }
     
     analyzer_state.initialized = true;
-    ESP_LOGI(TAG, "BLE device analyzer initialized successfully");
-    
+    ESP_LOGI(TAG, "BLE device analyzer initialized successfully");   
+
     return ESP_OK;
 }
 

@@ -7,6 +7,8 @@
 #include "esp_gap_ble_api.h"
 #include "esp_gattc_api.h"
 #include "bluetooth_uuid_definitions.h"
+#include "esp_event.h"
+
 
 /**
  * @brief BLE Audio streaming capabilities of a device
@@ -32,6 +34,9 @@ typedef enum {
  * Contains comprehensive information about a BLE device's services and
  * audio capabilities discovered through GATT service discovery. This
  * structure is populated asynchronously and delivered via callback.
+ * 
+ * Different from bluetooth_ble.h discovered_ble_device_t because it
+ * does not contain the raw advertising data and is BLE only. 
  */
 typedef struct {
     esp_bd_addr_t bda;                      // Bluetooth device address
@@ -62,6 +67,31 @@ typedef struct {
     bool connection_failed;                 // Failed to connect
     bool services_discovered;               // GATT discovery completed
 } ble_device_analysis_result_t;
+
+/**
+ * @brief Event data for BLE_ANALYZER_COMPLETE
+ * 
+ * Contains all information about the completed analysis device
+ */
+typedef struct {
+    ble_device_analysis_result_t device;         // Complete device information
+} ble_analysis_complete_event_data_t;
+
+/**
+ * @brief BLE Analyzer Event IDs
+ * 
+ * These are the specific events that the BLE analyzer system can post.
+ */
+typedef enum {
+    BLE_ANALYZER_COMPLETE               // BLE analysis completed
+} ble_analyzer_event_id_t;
+
+/**
+ * @brief Bluetooth Discovery Event Base
+ * 
+ * This creates a unique identifier for the Analyzer events.
+ */
+ESP_EVENT_DECLARE_BASE(BLE_ANALYZER_EVENTS);
 
 
 /**

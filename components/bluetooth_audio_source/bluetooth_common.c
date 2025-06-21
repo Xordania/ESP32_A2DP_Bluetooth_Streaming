@@ -100,3 +100,20 @@ esp_err_t bt_controller_stack_init(esp_bt_mode_t mode)
     
     return ESP_OK;
 }
+
+/**
+ * @brief Compare two bdas
+=
+ * @param a the first bda
+ * @param b the second vbda
+ * @return true if they're the same. False if they're not 
+ */
+bool equal_bda(esp_bd_addr_t a, esp_bd_addr_t b){
+    for(uint8_t i = 0; i < 6; i++){
+        if(a[i] != b[i]){
+            return false;
+        }
+    }
+
+    return true;
+}
