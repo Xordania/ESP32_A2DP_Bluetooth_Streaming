@@ -1,6 +1,7 @@
-#include <stdio.h>
-#include <stdlib.h>
+
 #include <string.h>
+#include <math.h>
+#include "main.h"
 #include "bluetooth_classic.h"
 #include "bluetooth_common.h"
 #include "bluetooth_ble.h"
@@ -17,11 +18,147 @@
 #include "bluetooth_a2dp.h"
 
 
+#define SINE_FREQ 440
+#define SAMPLE_RATE 44100
+
 static const char *TAG = "MAIN";
 
 // Target device information
 static bool jbl_device_found = false;
 static discovered_ble_device_t target_jbl_device;
+
+static sine_wave_config_t wave;
+
+
+/**
+ * @brief Generate sine wave for 16-bit mono audio
+ * 
+ * Simple example audio generator for 16-bit mono audio.
+ * 
+ * @param buffer Output buffer for audio samples (int16_t mono pairs)
+ * @param samples Number of samples per channel to generate
+ * @param sample_offset Starting sample index for phase continuity  
+ * @param context Generator context (sine_wave_config_t*)
+ */
+static void generate_sine_wave_16bit(int16_t *buffer, size_t samples, void *context)
+{
+    if (!context) {
+        ESP_LOGE(TAG, "No context provided to sine_wave generator");
+        return;
+    }
+    
+    sine_wave_config_t *config = (sine_wave_config_t*)context;
+    float frequency = config->frequency;
+    float amplitude = config->amplitude;  
+    float current_phase = config->phase;
+    
+    // Calculate phase increment per sample
+    float phase_increment = 2.0f * M_PI * frequency / config->sample_rate;
+   
+    for (size_t i = 0; i < samples; i++) {
+        float sine_value = sinf(current_phase + (i * phase_increment));
+        int16_t sample = (int16_t)(sine_value * amplitude * 32767);
+       
+        // Fill mono sample
+        buffer[i] = sample;  
+
+        // Advance phase for next sample
+        config->phase += phase_increment;
+    
+        // Wrap phase to prevent overflow
+        if (config->phase >= 2.0f * M_PI) {
+            config->phase -= 2.0f * M_PI;
+        }
+    }
+}
+
+/**
+ * @brief A2DP source data callback for audio streaming
+ *
+ * This callback is invoked by the ESP-IDF Bluetooth stack to request audio data
+ * for transmission over A2DP. The function generates real-time audio data and
+ * fills the provided buffer. Called from the A2DP source task context.
+ * 
+ * @param buf Pointer to audio data buffer to fill with PCM samples
+ * @param len Number of bytes requested by the stack:
+ *            - Positive value: Number of bytes to write to buffer
+ *            - Negative value (typically -1): Flush request, clear any buffered data
+ *
+ * @return int32_t Number of bytes actually written to buffer:
+ *                 - Should equal 'len' for successful data provision
+ *                 - Return 0 for flush requests or when no data available
+ *                 - Stack expects this to match requested length to avoid underflows
+ *
+ * @note Buffer format: 16-bit signed PCM samples, stereo interleaved
+ * @note Function must execute quickly to maintain real-time audio streaming
+ * @note Underflow warnings occur if insufficient data is provided
+ */
+static int32_t a2dp_data_callback(uint8_t *buf, int32_t len) {
+    // Handle flush request (when len is -1)
+    if (len < 0) {
+        ESP_LOGI(TAG, "Data buffer flush requested");
+        return 0;
+    }
+    else{
+        generate_sine_wave_16bit((int16_t *)buf, len, &wave);
+        return len;
+    }
+}
+
+
+// The set of functions below here (setup_data_request and start_playback_connection_complete) may be 
+// better served as finite state machine checks inside of a FreeRTOS task that has their values changed
+// by event handle callbacks (maybe)
+static void start_playback_connection_complete(void* event_handler_arg, 
+                                       esp_event_base_t event_base,
+                                       int32_t event_id, 
+                                       void* event_data){
+    
+    switch(event_id){
+        case A2DP_CONNECTION_COMPLETE:{    
+            a2dp_connection_complete_event_data_t *data = (a2dp_connection_complete_event_data_t*)event_data;
+            if(equal_bda(target_jbl_device.bda, data->conn.conn_stat.remote_bda)){
+
+                // init wave with starter variables
+                wave.amplitude = 0.05;
+                wave.frequency = 440;
+                wave.sample_rate = 44100;
+
+                // Start audio callback so the A2DP stack start to request data
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_START);
+            }
+        }
+    }
+}
+
+static void setup_data_request(void* event_handler_arg, 
+                                       esp_event_base_t event_base,
+                                       int32_t event_id, 
+                                       void* event_data){
+    
+    switch(event_id){
+        case A2DP_INITIALIZATION_COMPLETE:{
+            esp_err_t ret = esp_a2d_source_register_data_callback(a2dp_data_callback);
+            if(ret != ESP_OK){
+                ESP_LOGE(TAG, "Data callback registration failed: %s", esp_err_to_name(ret));
+            }
+                
+
+
+            // Send out sounding on a2dp to jbl device to check if it will connect
+            if(probe_device_a2dp_support(target_jbl_device.bda, 1000) == true){
+                ESP_LOGI(TAG, "Detected A2DP support");
+
+                ret = esp_event_handler_register(A2DP_CONNECTION_EVENTS,    // Event base
+                                    ESP_EVENT_ANY_ID,                           // Any event ID from this base
+                                    start_playback_connection_complete,         // Handler function
+                                    NULL);                                      // User data (none needed)
+            }else{
+                ESP_LOGE(TAG, "No A2DP support detected");
+            }
+        }
+    }
+}
 
 /**
  * @brief Check if discovered device is likely a JBL FLIP 5
@@ -114,35 +251,54 @@ static void ble_analysis_event_handler(void* event_handler_arg,
                                        void* event_data)
 {
 
-    ble_analysis_complete_event_data_t *device_data = (ble_analysis_complete_event_data_t*)event_data;
-    ble_device_analysis_result_t *device = &device_data->device;
+    switch(event_id){
+        case BLE_ANALYZER_COMPLETE:{
+            ble_analysis_complete_event_data_t *device_data = (ble_analysis_complete_event_data_t*)event_data;
+            ble_device_analysis_result_t *device = &device_data->device;
 
-    ESP_LOGI(TAG, "Analyzer event called. Device bda %02x:%02x:%02x:%02x:%02x:%02x. Stored bda: %02x:%02x:%02x:%02x:%02x:%02x",
-            device->bda[0], device->bda[1], device->bda[2],
-            device->bda[3], device->bda[4], device->bda[5],
-            target_jbl_device.bda[0], target_jbl_device.bda[1], target_jbl_device.bda[2],
-            target_jbl_device.bda[3], target_jbl_device.bda[4], target_jbl_device.bda[5]);
+            ESP_LOGI(TAG, "Analyzer event called. Device bda %02x:%02x:%02x:%02x:%02x:%02x. Stored bda: %02x:%02x:%02x:%02x:%02x:%02x",
+                    device->bda[0], device->bda[1], device->bda[2],
+                    device->bda[3], device->bda[4], device->bda[5],
+                    target_jbl_device.bda[0], target_jbl_device.bda[1], target_jbl_device.bda[2],
+                    target_jbl_device.bda[3], target_jbl_device.bda[4], target_jbl_device.bda[5]);
 
-    // Check we're dealing with the wanted JBL device here
-    if(equal_bda(device->bda, target_jbl_device.bda)){
+            // Check we're dealing with the wanted JBL device here
+            if(equal_bda(device->bda, target_jbl_device.bda)){
 
-        // Check if it has BLE audio capabilities (it doesn't, but this will form a template for future options)
-        if(ble_device_has_le_audio(device)){
-            // Connect via LE audio
+                // Check if it has BLE audio capabilities (it doesn't, but this will form a template for future options)
+                if(ble_device_has_le_audio(device)){
+                    // Connect via LE audio
 
-        }else{
+                }else{
 
-            // Check if the device has Bluetooth classic capabilities capabilities
-            if(parse_ble_adv_for_dual_mode(&target_jbl_device)){
-                
-                // Start up the bluetooth classic
-                bt_a2dp_source_init(true);
+                    // Check if the device has Bluetooth classic capabilities capabilities
+                    if(parse_ble_adv_for_dual_mode(&target_jbl_device)){
+                        
+                        esp_err_t ret;
 
-                // Send out sounding on a2dp to jbl device to check if it will connect
-                probe_device_a2dp_support(device->bda, 1000);
-                ESP_LOGI(TAG, "End of second if statement");
+                        // Deinitialize the bluetooth controller before we start it up in a different mode
+                        ret = bt_controller_stack_deinit();
 
+                        if(ret == ESP_OK){
+                            // Start up the bluetooth classic
+                            bt_a2dp_source_init(true);
+                            
+                            // Set up the event handler that will call when a2dp properly initialses
+                            ret = esp_event_handler_register(A2DP_INITIALIZATION_EVENTS,     // Event base
+                                                        ESP_EVENT_ANY_ID,                // Any event ID from this base
+                                                        setup_data_request,              // Handler function
+                                                        NULL);                           // User data (none needed)
 
+                                                        
+                            if (ret != ESP_OK) {
+                                ESP_LOGE(TAG, "Failed to register A2DP initialization event handler: %s", esp_err_to_name(ret));
+                            }
+
+                        }else{
+                            ESP_LOGE(TAG, "Controller deinit failed: %s", esp_err_to_name(ret));
+                        }
+                    }
+                }
             }
         }
     }
@@ -342,7 +498,6 @@ static esp_err_t init_event_handling(void)
         ESP_LOGE(TAG, "Failed to register Bluetooth Classic discovery event handler: %s", esp_err_to_name(ret));
         return ret;
     }
-
 
     ESP_LOGI(TAG, "Event handling initialized successfully");
     return ESP_OK;

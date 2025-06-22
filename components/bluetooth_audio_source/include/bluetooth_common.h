@@ -4,4 +4,5 @@
 
 esp_err_t bt_nvs_init(void);
 esp_err_t bt_controller_stack_init(esp_bt_mode_t mode);
+esp_err_t bt_controller_stack_deinit(void);
 bool equal_bda(esp_bd_addr_t a, esp_bd_addr_t b);

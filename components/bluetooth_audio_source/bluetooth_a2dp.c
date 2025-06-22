@@ -1,3 +1,12 @@
+/*
+ *   @brief handles the connection an a2dp compliant sink
+ *
+ *   This file handles the a2dp connection between this device and 
+ *   a conencted sink device. It defines the callbacks and handles the
+ *   processing required.
+ */
+
+
 #include "sdkconfig.h"
 
 // Don't bother flashing this if not in either bluetooth classic mode or dual bluetooth mode
@@ -22,6 +31,73 @@ static const char* TAG = "BT_A2DP";
 // Queue for discoverd devices
 QueueHandle_t discovered_device_queue = NULL;
 
+/**
+ * @brief Define the event base for A2DP initialization 
+ */
+ESP_EVENT_DEFINE_BASE(A2DP_INITIALIZATION_EVENTS);
+
+/**
+ * @brief Define the event base for A2DP connection
+ */
+ESP_EVENT_DEFINE_BASE(A2DP_CONNECTION_EVENTS);
+
+// ============================================================================
+// EVENT POSTING FUNCTIONS
+// ============================================================================
+/**
+ * 
+ * @brief Post a2dp initialized event
+ * 
+ * Posts A2DP_INITIALIZATION_COMPLETE
+ */
+static void post_initialization_complete_event()
+{
+    // Post event
+    esp_err_t ret = esp_event_post(A2DP_INITIALIZATION_EVENTS,
+                                  A2DP_INITIALIZATION_COMPLETE,
+                                  NULL,
+                                  sizeof(NULL),
+                                  100 / portTICK_PERIOD_MS);  // 100ms timeout
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to post initialization complete event: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGD(TAG, "Posted initialization complete event");
+    }
+}
+
+/**
+ * 
+ * @brief Post device discovered event
+ * 
+ * Posts A2DP_CONNECTION_COMPLETE
+ * 
+ * @param param the structure containing information about the connection that has been made
+ * 
+ */
+static void post_connection_complete_event(esp_a2d_cb_param_t *param)
+{
+
+    a2dp_connection_complete_event_data_t event_data;
+    event_data.conn = *param;
+
+    // Post event
+    esp_err_t ret = esp_event_post(A2DP_CONNECTION_EVENTS,
+                                  A2DP_CONNECTION_COMPLETE,
+                                  &event_data,
+                                  sizeof(event_data),
+                                  100 / portTICK_PERIOD_MS);  // 100ms timeout
+
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialization complete: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGD(TAG, "Posted initialization complete event");
+    }
+}
+
+// ============================================================================
+// FUNCTIONALITY
+// ============================================================================
 
 /**
  * @brief Parse audio codec configuration from A2DP negotiation
@@ -136,7 +212,8 @@ static void bt_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
                          param->conn_stat.remote_bda[0], param->conn_stat.remote_bda[1],
                          param->conn_stat.remote_bda[2], param->conn_stat.remote_bda[3], 
                          param->conn_stat.remote_bda[4], param->conn_stat.remote_bda[5]);
-            // Audio stream
+            
+            post_connection_complete_event(param);
         }
         else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTING)
         {
@@ -197,6 +274,8 @@ static void bt_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
     case ESP_A2D_PROF_STATE_EVT:
         if(param->a2d_prof_stat.init_state == ESP_A2D_INIT_SUCCESS){
             ESP_LOGI(TAG, "A2DP initialization successful");
+
+            post_initialization_complete_event();
         }else{
             ESP_LOGI(TAG, "A2DP deinitialization successful");
         }

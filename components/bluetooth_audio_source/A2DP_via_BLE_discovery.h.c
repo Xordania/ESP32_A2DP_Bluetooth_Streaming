@@ -34,8 +34,8 @@ bool probe_device_a2dp_support(esp_bd_addr_t bda, uint32_t timeout_ms){
     esp_err_t ret = esp_a2d_source_connect(bda);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "A2DP connection initiation failed: %s", esp_err_to_name(ret));
-        return ret;
+        return false;
     }
 
-    return false;
+    return true;
 }

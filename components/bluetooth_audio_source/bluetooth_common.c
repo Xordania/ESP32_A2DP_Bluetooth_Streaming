@@ -102,6 +102,55 @@ esp_err_t bt_controller_stack_init(esp_bt_mode_t mode)
 }
 
 /**
+ * @brief Deinitialize Bluetooth controller and Bluedroid stack
+ *
+ * From ESP-IDF documentation: "Before the application terminates, the Bluetooth 
+ * controller and Bluedroid stack should be disabled and deinitialized to 
+ * properly free resources."
+ *
+ * Also: "The deinitialization should be done in reverse order of initialization:
+ * disable and deinit Bluedroid first, then disable and deinit the controller."
+ *
+ * @return esp_err_t ESP_OK on success, error code on failure
+ */
+esp_err_t bt_controller_stack_deinit(void)
+{
+    esp_err_t ret;
+    
+    // Disable Bluedroid protocol stack
+    ret = esp_bluedroid_disable();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluedroid stack disable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Deinitialize Bluedroid protocol stack
+    ret = esp_bluedroid_deinit();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluedroid stack deinit failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Disable Bluetooth controller
+    ret = esp_bt_controller_disable();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth controller disable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Deinitialize Bluetooth controller
+    ret = esp_bt_controller_deinit();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Bluetooth controller deinit failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ESP_LOGI(TAG, "Bluetooth controller and stack deinitialized successfully");
+    
+    return ESP_OK;
+}
+
+/**
  * @brief Compare two bdas
 =
  * @param a the first bda
